@@ -2,7 +2,7 @@
 
 A push to `main` builds the Docker image, pushes it to the existing ECR repository and deploys it to the existing ECS service with an AWS CodeDeploy blue/green deployment. Pull requests run checks only and never touch AWS.
 
-> **Status: written and validated offline, not yet run against AWS.** The workflows, `appspec.yaml`, the CodeDeploy Terraform and the OIDC bootstrap stack are in the repository. Nothing in AWS was changed to create them, and the blue/green switch is **off by default** (`enable_blue_green = false`), so the running stack is unchanged. The one-time setup below turns it on.
+> **Status (2026-10-31): validated, not yet deployed to AWS.** The workflows, `appspec.yaml`, the CodeDeploy Terraform and the OIDC bootstrap stack are in the repository. Checked so far: `terraform fmt` and `validate` on both stacks; `terraform plan` against the live stack (with `enable_blue_green=false`: 0 changes, only the state move to `aws_ecs_service.app[0]`; with `true`: 6 to add, the service replaced, nothing else); `actionlint` on both workflows; Checkov 195 passed, 0 failed; Semgrep, Trivy (image, Dockerfile, lock file) and `npm audit` clean; and all six pull request checks passed on a real pull request in GitHub Actions. The deploy workflow ran once on the first push: `Test` passed and the deploy job stopped at the AWS login, as designed, because the deploy role and `AWS_DEPLOY_ROLE_ARN` do not exist yet. Nothing in AWS was changed. The blue/green switch is **off by default** (`enable_blue_green = false`), so the running stack is unchanged. The one-time setup below turns it on.
 
 ## Why GitHub Actions instead of CodePipeline and CodeBuild
 
@@ -77,7 +77,7 @@ gh api -X PUT repos/bdahiya2007/secure-containerized-microservices-app-aws/branc
 EOF
 ```
 
-Branch protection on a private repository needs a paid GitHub plan. If the command is refused, apply it when the repository becomes public.
+Branch protection on a private repository needs a paid GitHub plan. It was refused here (HTTP 403), so `main` is **not protected yet**: apply the command above when the repository becomes public. Until then, use pull requests by habit and run the secret scan before merging.
 
 ### 2. Pin the OIDC trust to this exact repository
 
@@ -164,7 +164,9 @@ Trivy skips vulnerabilities that have no fixed version yet (`--ignore-unfixed`),
 
 ## Limitations and next steps
 
-- **Not yet exercised against AWS.** Offline validation only (see the checks in the README). The first real deployment may need small fixes; this page will be updated with the result.
+- **Not yet exercised against AWS.** The first real deployment may need small fixes; this page will be updated with the result.
+- **`main` is not protected** while the repository is private on a free plan (see step 1).
+- **Dependabot's Terraform provider bump to 6.x** (pull request #2) is a major version change; plan it against the live state before merging.
 - **Switching to blue/green replaces the service** and causes a short outage. Production would use a blue/green setup from the start.
 - **No test listener or lifecycle hooks.** CodeDeploy shifts production traffic directly. Add a test listener port plus a `BeforeAllowTraffic` hook (a Lambda that calls `/products`) for pre-traffic checks.
 - **No CloudWatch alarm rollback.** Add alarms (5xx rate, target response time) to the deployment group so a bad release rolls back on metrics, not only on failed health checks.
