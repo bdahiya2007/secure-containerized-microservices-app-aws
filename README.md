@@ -104,7 +104,7 @@ What is still open after the scans in [docs/vulnerability-scan-report.md](docs/v
 | Low | **No static code analysis** | Nothing checks the app code for injection-style flaws, and Trivy doesn't | Semgrep or CodeQL in CI |
 | Low | **Base image pinned by tag, not digest** | `node:26.13.0-alpine3.24` (build stage) and `alpine:3.24.3` (runtime stage) can in theory be republished, and the two versions are bumped separately | Pin the image digest and update it deliberately |
 | Low | **Deploy permissions have no permissions boundary** | The scoped IAM policy for the PowerUserAccess permission set is verified: `CreateRole`, `PutRolePolicy`, `AttachRolePolicy` and `PassRole` all worked during the apply. It is limited to `product-service-*` roles, but it doesn't force a permissions boundary on them | Add a permissions boundary condition, as in the other projects |
-| Low | **Local Terraform state** | Not locked or backed up, and held on one machine | An S3 backend with locking |
+| Low | **Local Terraform state** | `backend.tf` now points to S3 with locking, but the existing local state has not been migrated yet | Run the migration in [terraform/README.md](terraform/README.md#remote-state) |
 
 ## Monitoring and scaling
 
@@ -269,7 +269,7 @@ needed); the commands are in the [runbook](docs/runbook.md#2-load-the-database-s
 | **Pipeline written, not yet run in AWS** | GitHub Actions + CodeDeploy blue/green is in the repository ([docs/CICD.md](docs/CICD.md)); the pull request checks pass in GitHub, but nothing has been deployed to AWS from it. The blue/green switch is off by default; turning it on replaces the ECS service (a short outage) | Run the one-time setup in docs/CICD.md and record the first deployment |
 | **Secret scan is also a CI check** | The pre-commit hook can be skipped (`--no-verify`) or never enabled, so the pull request check re-runs the scan on every commit and all tracked files | Make the check required once branch protection is applied (docs/CICD.md) |
 | **No automated tests** | The service is verified by hand only | Unit tests for the routes with the pool mocked |
-| **Local Terraform state** | State lives on one machine and is not locked | An S3 backend with locking |
+| **Local Terraform state (migration pending)** | The S3 backend is configured (`terraform/backend.tf`), but the live stack's state is still the local file until `terraform init -migrate-state` is run | Run the migration in [terraform/README.md](terraform/README.md#remote-state) |
 | **Single NAT gateway and single-AZ database** | A zone failure affects outbound access or the database | One NAT per zone, `multi_az = true` |
 | **Deletion safeguards are off** | `deletion_protection = false`, `skip_final_snapshot = true` | Flip both for anything that holds real data |
 | **Auto Scaling: CPU-based scaling not tested** | Target tracking on CPU and requests per task is defined in `terraform/autoscaling.tf` (2 to 4 tasks). Verified in AWS: 5 minutes of traffic took the service from 2 to 4 healthy tasks, 2 per availability zone, and about 18 minutes after the load ended the service began scaling back in (4 to 3 tasks); see [docs/E2E_Test_Results.md](docs/E2E_Test_Results.md). Scaling on real CPU load was not tested, because `/health` is too light to raise CPU. Nothing notifies anyone of errors: there are no CloudWatch alarms of our own. Database connections peaked at 13 during the test, but the 4-task ceiling hasn't been tested near the `db.t4g.micro` limit. | Observe scale-in, and add alarms on 5xx responses and unhealthy targets |
