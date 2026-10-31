@@ -33,6 +33,8 @@ terraform.rc
 # Saved plans can contain sensitive values
 tfplan
 *.tfplan
+# Backend config holds the state bucket name, which contains the account ID (copy from backend.hcl.example)
+backend.hcl
 # Crash logs
 crash.log
 crash.*.log

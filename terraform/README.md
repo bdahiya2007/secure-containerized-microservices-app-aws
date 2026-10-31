@@ -276,3 +276,23 @@ terraform -chdir=terraform destroy
 
 `plan -destroy` previews what will be deleted; `destroy` asks you to type `yes`. The database is deleted with its data
 (`skip_final_snapshot = true`), and the ECR repository is deleted with its images (`force_delete = true`), so push the image again after the next apply.
+
+## Remote state
+
+State is stored in S3 (`backend.tf`) with native locking (`use_lockfile`, Terraform 1.10 or later), so no DynamoDB table is needed. Key: `secure-containerized-microservices-app-aws/terraform.tfstate`. The `terraform/bootstrap` stack deliberately keeps **local** state (applied by hand, never by the pipeline).
+
+The bucket name is not hard-coded because it contains the AWS account ID. The state bucket must have versioning, encryption and all public access blocked. The sibling project's existing shared bucket meets this; otherwise create one first.
+
+Migrate the existing local state (once; asks before copying):
+
+```bash
+cd terraform
+cp backend.hcl.example backend.hcl            # then set the real bucket name (backend.hcl is git-ignored)
+terraform init -backend-config=backend.hcl -migrate-state     # answer "yes" to copy the local state
+terraform plan                                # expect: no changes
+aws s3 ls s3://<bucket>/secure-containerized-microservices-app-aws/    # confirm the state object exists
+```
+
+Only after that, delete the leftover local `terraform.tfstate*` files (keep a copy until a plan shows no changes). After this, every `terraform` command needs the same `-backend-config=backend.hcl` at `init`; the CI validate job uses `-backend=false` and needs no bucket.
+
+State can still be lost by emptying the bucket by hand. Keep versioning on, and do not grant the pipeline's deploy role access to the bucket (it never runs Terraform).
