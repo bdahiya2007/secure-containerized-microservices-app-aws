@@ -1,0 +1,84 @@
+# --- Secrets: private keys, credentials ---
+*.pem
+*.key
+*.ppk
+*.p12
+*.pfx
+*credentials*
+.env
+.env.*
+!.env.example
+
+# --- Node.js ---
+node_modules/
+npm-debug.log*
+coverage/
+
+# --- Terraform (applies to terraform/ and terraform/bootstrap/) ---
+# NOTE: .terraform.lock.hcl is NOT ignored on purpose: it pins the provider versions and is committed.
+# Local .terraform directories (provider plugins, regenerable via `terraform init`)
+**/.terraform/*
+# State files can contain sensitive values in plaintext
+*.tfstate
+*.tfstate.*
+# State lock info
+.terraform.tfstate.lock.info
+# tfvars files commonly hold real secrets, never commit them
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+# Terraform CLI config that may embed credentials
+.terraformrc
+terraform.rc
+# Saved plans can contain sensitive values
+tfplan
+*.tfplan
+# Crash logs
+crash.log
+crash.*.log
+
+# --- Local-only tracking files (a private working list, never pushed) ---
+TODO.md
+
+# --- Files the CI/CD workflow or local deploys generate (never committed) ---
+taskdef.json
+revision.json
+appspec.rendered.yaml
+*.rendered.*
+
+# --- Logs, test output and scratch files ---
+*.log
+logs/
+.nyc_output/
+junit.xml
+*.tmp
+*.bak
+*.orig
+*.swp
+*~
+scratch/
+tmp/
+verify-output*.txt
+
+# --- Build output and package-manager caches ---
+dist/
+build/
+.npm/
+.eslintcache
+*.tgz
+
+# --- Local tool settings (personal, machine-specific) ---
+.claude/
+.venv/
+venv/
+
+# --- Python bytecode (created when the scripts are imported) ---
+__pycache__/
+*.pyc
+
+# --- Editors and OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.code-workspace

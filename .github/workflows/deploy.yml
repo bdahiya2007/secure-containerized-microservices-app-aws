@@ -1,0 +1,191 @@
+name: Deploy
+
+# Builds the Product Service image, pushes it to the existing ECR repository and deploys it to the
+# existing ECS service with a CodeDeploy blue/green deployment. Runs on every push to main
+# (documentation-only changes are skipped) or by hand.
+#
+#   1. test    - unit tests (the same tests as the pull request check)
+#   2. build   - docker build, push tagged with the git commit SHA, wait for the ECR scan, stop on CRITICAL findings
+#   3. register - copy the running task definition, swap in the new image, register it as a new revision
+#   4. deploy  - CodeDeploy (appspec.yaml) starts the new tasks in the idle target group, shifts traffic
+#                gradually and rolls back automatically if the new tasks never become healthy
+#
+# Infrastructure (Terraform) is NOT applied here. The role this workflow assumes can only push to one ECR
+# repository, register task definitions and start deployments of one CodeDeploy application.
+#
+# Authenticates via GitHub OIDC: no long-lived AWS credentials are stored in this repo. The role is created
+# by terraform/bootstrap, which is applied manually and never by this workflow.
+#
+# Required repository secret (Settings -> Secrets and variables -> Actions -> Secrets):
+#   AWS_DEPLOY_ROLE_ARN - the deploy_role_arn output of terraform/bootstrap
+# The ECS service must have been created with enable_blue_green = true (see docs/CICD.md).
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+# One deployment at a time. A queued run waits instead of cancelling a deployment midway.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: product-service
+  ECS_CLUSTER: product-service-cluster
+  ECS_SERVICE: product-service
+  TASK_FAMILY: product-service
+  CODEDEPLOY_APP: product-service
+  CODEDEPLOY_GROUP: product-service-dg
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: product-service/package-lock.json
+
+      - name: Install dependencies and run the tests
+        working-directory: product-service
+        run: |
+          npm ci
+          npm test
+
+  deploy:
+    name: Build, push and deploy (blue/green)
+    needs: test
+    runs-on: ubuntu-24.04
+    environment: dev
+    timeout-minutes: 45
+    permissions:
+      id-token: write # required to request the OIDC token
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Image names and ARNs contain the AWS account ID. GitHub only hides values it knows about, so
+      # register the account ID as a mask before anything prints it.
+      - name: Mask the AWS account ID in the logs
+        id: account
+        run: |
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::${account_id}"
+          echo "registry=${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      # Fail early, with a clear message, if the stack was not created with enable_blue_green = true
+      - name: Check the CodeDeploy deployment group exists
+        run: |
+          if ! aws deploy get-deployment-group --application-name "$CODEDEPLOY_APP" \
+                 --deployment-group-name "$CODEDEPLOY_GROUP" --query 'deploymentGroupInfo.deploymentGroupName' --output text >/dev/null; then
+            echo "::error::CodeDeploy deployment group not found. Apply the Terraform with enable_blue_green = true first (docs/CICD.md)."
+            exit 1
+          fi
+
+      - name: Log in to Amazon ECR
+        env:
+          REGISTRY: ${{ steps.account.outputs.registry }}
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+
+      # The tag is the commit SHA, so every deployed image maps to exactly one commit. :latest is not touched.
+      - name: Build and push the image
+        id: image
+        env:
+          REGISTRY: ${{ steps.account.outputs.registry }}
+        run: |
+          image="${REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+          docker build --platform linux/amd64 -t "$image" product-service
+          docker push "$image"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+      # ECR scans on push. A CRITICAL finding stops the deployment (the image stays in ECR for inspection).
+      - name: Wait for the ECR scan and stop on CRITICAL findings
+        run: |
+          aws ecr wait image-scan-complete --repository-name "$ECR_REPOSITORY" --image-id imageTag="$GITHUB_SHA"
+          counts=$(aws ecr describe-image-scan-findings --repository-name "$ECR_REPOSITORY" --image-id imageTag="$GITHUB_SHA" \
+                     --query 'imageScanFindings.findingSeverityCounts' --output json)
+          echo "Scan findings by severity: ${counts}"
+          critical=$(echo "$counts" | jq -r '.CRITICAL // 0')
+          if [ "$critical" -gt 0 ]; then
+            echo "::error::The image has ${critical} CRITICAL vulnerabilities; not deploying."
+            exit 1
+          fi
+
+      # The service's current task definition is the template, so CPU, memory, roles, environment and
+      # secrets stay exactly as Terraform defined them. Only the image changes.
+      - name: Register a new task definition revision
+        id: taskdef
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          aws ecs describe-task-definition --task-definition "$TASK_FAMILY" --query taskDefinition --output json |
+            jq --arg image "$IMAGE" --arg name "$ECS_SERVICE" '
+              del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+              | (.containerDefinitions[] | select(.name == $name) | .image) = $image' > taskdef.json
+          arn=$(aws ecs register-task-definition --cli-input-json file://taskdef.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "Registered task definition revision ${arn##*/}"
+          echo "arn=${arn}" >> "$GITHUB_OUTPUT"
+
+      - name: Start the CodeDeploy blue/green deployment
+        id: deployment
+        env:
+          TASK_DEFINITION_ARN: ${{ steps.taskdef.outputs.arn }}
+        run: |
+          sed "s|<TASK_DEFINITION>|${TASK_DEFINITION_ARN}|" appspec.yaml > appspec.rendered.yaml
+          jq -n --rawfile content appspec.rendered.yaml '{revisionType: "AppSpecContent", appSpecContent: {content: $content}}' > revision.json
+          id=$(aws deploy create-deployment \
+                 --application-name "$CODEDEPLOY_APP" \
+                 --deployment-group-name "$CODEDEPLOY_GROUP" \
+                 --revision file://revision.json \
+                 --description "GitHub Actions ${GITHUB_SHA}" \
+                 --query deploymentId --output text)
+          echo "Started deployment ${id}"
+          echo "id=${id}" >> "$GITHUB_OUTPUT"
+
+      # Waits until traffic has moved and the deployment succeeded (up to 30 minutes). On failure the
+      # error is printed and CodeDeploy has already rolled back to the old tasks.
+      - name: Wait for the deployment
+        env:
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
+        run: |
+          if aws deploy wait deployment-successful --deployment-id "$DEPLOYMENT_ID"; then
+            status=Succeeded
+          else
+            status=Failed
+          fi
+          info=$(aws deploy get-deployment --deployment-id "$DEPLOYMENT_ID" --query 'deploymentInfo.{status:status,error:errorInformation}' --output json)
+          {
+            echo '## Deployment'
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- CodeDeploy status: ${status}"
+            echo '```json'
+            echo "$info"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$info"
+          [ "$status" = Succeeded ]

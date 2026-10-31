@@ -1,0 +1,50 @@
+# Keeps the pinned GitHub Actions current. Every `uses:` line is pinned to a full commit SHA with the
+# version in a trailing comment; Dependabot bumps both, and the pull request checks run on each update.
+# One grouped pull request a week, so action updates do not arrive one by one.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Library and base-image updates for the Product Service. Pull requests run the unit tests, npm audit,
+  # Semgrep and the Trivy scans before anything can merge.
+  - package-ecosystem: "npm"
+    directory: "/product-service"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps"
+    groups:
+      npm:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/product-service"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: "terraform"
+    directory: "/terraform"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps"

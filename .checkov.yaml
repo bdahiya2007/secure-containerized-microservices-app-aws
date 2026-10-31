@@ -1,0 +1,67 @@
+# Checkov configuration. Findings listed under skip-check were reviewed and are accepted for this
+# demo deployment; each has a reason. Anything new fails the check. The production list is in the
+# README ("Known limitations and roadmap") and docs/vulnerability-scan-report.md.
+directory:
+  - terraform
+framework:
+  - terraform
+quiet: true
+compact: true
+skip-path:
+  - .terraform
+skip-check:
+  # HTTP only: the ALB listens on port 80 with no TLS. HTTPS needs a domain name and an ACM
+  # certificate, which this project does not have. Add them together with the redirect for production.
+  - CKV_AWS_2
+  - CKV_AWS_103
+  - CKV_AWS_378
+  - CKV2_AWS_20
+  # The ALB is the intentionally public entry point, so it accepts port 80 from anywhere.
+  - CKV_AWS_260
+  # Cost: Multi-AZ RDS, an ALB WAF, ALB access logs (needs an S3 bucket), VPC flow logs and
+  # customer-managed KMS keys all bill by the hour or by volume, and are not needed for a short demo.
+  - CKV_AWS_157
+  - CKV2_AWS_28
+  - CKV2_AWS_11
+  - CKV_AWS_136
+  - CKV_AWS_158
+  # The ALB access-log bucket (terraform/logging.tf). Elastic Load Balancing can only write to a bucket that
+  # uses SSE-S3 (a customer-managed KMS key isn't supported), the bucket is itself the log sink so logging it
+  # would be circular, versioning would keep deleted log files (the logs expire after 30 days on purpose), and
+  # replication and event notifications add cost for a demo with nothing to notify or recover.
+  - CKV_AWS_145
+  # The optional CloudTrail trail (enable_cloudtrail) writes to S3 with log file validation. Also streaming it to
+  # CloudWatch Logs needs a role and adds ingestion cost, which isn't needed for a demo.
+  - CKV2_AWS_10
+  # The same trail: its files are encrypted at rest with the bucket's SSE-S3 and validated with log file digests.
+  # A customer-managed KMS key (CKV_AWS_35) adds a key policy and about $1 a month, and an SNS topic (CKV_AWS_252)
+  # has no subscriber in a demo, so neither is worth it here. Both are on the production list.
+  - CKV_AWS_35
+  - CKV_AWS_252
+  - CKV_AWS_18
+  - CKV_AWS_21
+  - CKV_AWS_144
+  - CKV2_AWS_62
+  # Log groups keep 14 days on purpose (low volume, cost); a year of retention is not needed here.
+  - CKV_AWS_338
+  # Deletion protection is off so a demo can be destroyed with terraform destroy. Turn it on for production.
+  - CKV_AWS_150
+  - CKV_AWS_293
+  # RDS monitoring extras (enhanced monitoring, Performance Insights, log exports, query logging) add
+  # cost and setup for no benefit at demo size.
+  - CKV_AWS_118
+  - CKV_AWS_129
+  - CKV_AWS_353
+  - CKV2_AWS_30
+  # The availability zone data source is filtered to standard zones and takes the first two. A fixed
+  # zone list would make the code less portable across regions and accounts.
+  - CKV_AWS_394
+  # The app authenticates with the RDS-managed password in Secrets Manager. IAM database
+  # authentication would need token generation in the app (planned for production).
+  - CKV_AWS_161
+  # The deploy role's trust policy (terraform/bootstrap) pins the repository by immutable owner and repository ID plus
+  # the environment, which is stricter than the repo-name pattern this rule recognises (false positive).
+  - CKV_AWS_358
+  # Mutable ECR tags: a known gap listed in the README. The pipeline pushes unique commit-SHA tags, but the Terraform task
+  # definition still starts from :latest, so the repository cannot be made immutable until that is changed (docs/CICD.md).
+  - CKV_AWS_51

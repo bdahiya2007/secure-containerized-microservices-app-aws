@@ -1,0 +1,185 @@
+name: Validate
+
+# Runs on every pull request targeting main. Fully offline: no AWS credentials are used, so a pull
+# request can never touch AWS. Deployment is in deploy.yml and runs only on pushes to main.
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: validate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: '0'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Terraform and appspec
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.3
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive -diff terraform
+
+      # -backend=false: no state or AWS access is needed to validate the configuration.
+      - name: Validate the application stack
+        working-directory: terraform
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate the bootstrap stack
+        working-directory: terraform/bootstrap
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Check appspec.yaml and the deploy script
+        run: python3 -I scripts/check-appspec.py
+
+  secret-scan:
+    name: Scan for secrets and sensitive data
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Scanner self-test
+        run: python3 scripts/secret-scan.py --self-test
+
+      - name: Scan all tracked files
+        env:
+          SECRET_SCAN_LITERALS: ${{ secrets.SECRET_SCAN_LITERALS }}
+        run: python3 scripts/secret-scan.py --all-tracked
+
+      - name: Scan every commit in the pull request
+        if: github.event_name == 'pull_request'
+        env:
+          SECRET_SCAN_LITERALS: ${{ secrets.SECRET_SCAN_LITERALS }}
+        run: python3 scripts/secret-scan.py --range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+  app-tests:
+    name: Product Service unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: product-service/package-lock.json
+
+      - name: Install dependencies (exact lock file versions)
+        working-directory: product-service
+        run: npm ci
+
+      - name: Run unit tests
+        working-directory: product-service
+        run: npm test
+
+      - name: Audit production dependencies
+        working-directory: product-service
+        run: npm audit --omit=dev --audit-level=high
+
+  image-build:
+    name: Build and scan the container image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same platform as the deployed task definition (X86_64). Nothing is pushed from a pull request.
+      - name: Build the image
+        run: docker build --platform linux/amd64 -t product-service:pr product-service
+
+      - name: Check the image runs as a non-root user
+        run: |
+          user=$(docker image inspect product-service:pr --format '{{.Config.User}}')
+          echo "image user: ${user}"
+          case "$user" in ''|0|root|0:*|root:*) echo "::error::The image runs as root"; exit 1;; esac
+
+      # Trivy runs from its container image (pinned version), so no third-party action is needed. The
+      # vulnerability database is downloaded on each run. --ignore-unfixed skips vulnerabilities that have no
+      # fixed version yet (nothing to act on); everything else at HIGH or CRITICAL fails the check.
+      - name: Scan the image for vulnerabilities and embedded secrets (Trivy)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.76.1 image \
+            --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress product-service:pr
+
+      - name: Scan the Dockerfile and dependency lock file (Trivy)
+        run: |
+          docker run --rm -v "$PWD/product-service:/work:ro" aquasec/trivy:0.76.1 config \
+            --severity HIGH,CRITICAL --exit-code 1 /work
+          docker run --rm -v "$PWD/product-service:/work:ro" aquasec/trivy:0.76.1 fs \
+            --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress /work
+
+  # Static analysis (SAST) of the Node.js code. Installed into a throwaway virtual environment; nothing is
+  # added to the application. Rule sets are fetched from the Semgrep registry (no account or login).
+  code-scan:
+    name: Code security scan (Semgrep)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install semgrep
+        run: |
+          python3 -m venv "$RUNNER_TEMP/tools"
+          "$RUNNER_TEMP/tools/bin/pip" install --quiet semgrep==1.183.0
+          "$RUNNER_TEMP/tools/bin/pip" freeze | grep -i '^semgrep=='
+
+      - name: Scan the application code
+        run: |
+          "$RUNNER_TEMP/tools/bin/semgrep" scan --metrics=off --error --quiet \
+            --config p/nodejs --config p/javascript --config p/owasp-top-ten --config p/secrets \
+            product-service/src
+
+  terraform-security:
+    name: Terraform security scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install checkov
+        run: |
+          python3 -m venv "$RUNNER_TEMP/tools"
+          "$RUNNER_TEMP/tools/bin/pip" install --quiet checkov==3.3.29
+          "$RUNNER_TEMP/tools/bin/pip" freeze | grep -i '^checkov=='
+
+      - name: Scan Terraform with checkov
+        run: |
+          "$RUNNER_TEMP/tools/bin/checkov" --config-file .checkov.yaml

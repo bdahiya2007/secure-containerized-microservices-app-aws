@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# Blocks a commit that contains secrets or sensitive data (see scripts/secret-scan.py).
+# Enable once per clone: ./scripts/install-hooks.sh   (CI re-checks every pull request regardless.)
+exec python3 "$(git rev-parse --show-toplevel)/scripts/secret-scan.py" --staged
