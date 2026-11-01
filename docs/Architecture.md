@@ -286,7 +286,7 @@ Other network controls: tasks and the database have no public IPs; the private r
 | Data | At rest | In transit | Access |
 |---|---|---|---|
 | Product data (RDS) | Encrypted (AWS-managed key), 7-day backups | TLS from the app. The server certificate is **not verified** (gap) | Only the app security group, with the managed password |
-| Database credentials | In Secrets Manager, created and managed by RDS, rotated automatically every 7 days (the secret's metadata shows a first rotation shortly after creation; a forced rotation was tested live and found a retry race, since fixed; see [Secrets.md](Secrets.md#live-rotation-test)) | Fetched by the app at runtime over TLS with its task role, and again after a rotation ([Secrets.md](Secrets.md)) | The task role, for that one secret; never in code, image, task definition, variables or state |
+| Database credentials | In Secrets Manager, created and managed by RDS, rotated automatically every 7 days (the secret's metadata shows a first rotation shortly after creation; a forced rotation was tested live: a retry race was found and fixed, and the re-test passed; see [Secrets.md](Secrets.md#live-rotation-test)) | Fetched by the app at runtime over TLS with its task role, and again after a rotation ([Secrets.md](Secrets.md)) | The task role, for that one secret; never in code, image, task definition, variables or state |
 | Container image | ECR, AES-256 | Pulled over HTTPS | The execution role |
 | Log files (S3) | SSE-S3, public access blocked, expiring | TLS-only bucket policy | Narrow per-writer policy statements |
 | Client traffic | n/a | **HTTP only** (gap: needs a domain and an ACM certificate) | Limited by `alb_ingress_cidr` |

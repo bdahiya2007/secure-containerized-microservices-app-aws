@@ -120,8 +120,9 @@ scaling_configured() {
 }
 dashboard_ok() { aws cloudwatch get-dashboard --dashboard-name "$PROJECT" --query DashboardBody --output text | py 'import json,sys; d=json.load(sys.stdin); assert sum(1 for w in d["widgets"] if w["type"]=="metric")>=1'; }
 log_group_retention() { [ "$(aws logs describe-log-groups --log-group-name-prefix "/ecs/$PROJECT" --query 'logGroups[0].retentionInDays' --output text)" != None ]; }
+# CloudWatch can return an empty first page with a continuation token while it scans, so read every page (no --no-paginate).
 json_app_logs() {
-  aws logs filter-log-events --log-group-name "/ecs/$PROJECT" --start-time "$(( $(date +%s) - 10800 ))000" --filter-pattern '{ $.msg = "request" }' --no-paginate --output json \
+  aws logs filter-log-events --log-group-name "/ecs/$PROJECT" --start-time "$(( $(date +%s) - 10800 ))000" --filter-pattern '{ $.msg = "request" }' --output json \
     | py 'import json,sys; ev=json.load(sys.stdin)["events"]; assert ev; d=json.loads(ev[-1]["message"]); assert d["request_id"] and isinstance(d["status"],int) and "duration_ms" in d'
 }
 alb_logs_today() { [ "$(aws s3 ls "s3://$LOG_BUCKET/alb/" --recursive | grep -c "$(date -u +%Y/%m/%d)")" -gt 0 ]; }
