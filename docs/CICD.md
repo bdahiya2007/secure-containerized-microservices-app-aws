@@ -97,6 +97,8 @@ terraform apply -var 'github_sub_prefix=repo:<owner>@<id>/<repo>@<id>'
 terraform output -raw deploy_role_arn
 ```
 
+**Permissions first.** The scoped policy in [iam/product-service-iam-policy.json](iam/product-service-iam-policy.json) was widened for this pipeline: it now also lets the engineer attach `AWSCodeDeployRoleForECS` and pass `product-service-*` roles to `codedeploy.amazonaws.com`. Update the policy on your SSO permission set (replace `ACCOUNT_ID`), then sign in again, before step 3 and step 5. A PowerUserAccess role cannot read or list IAM OIDC providers, so `aws iam get-open-id-connect-provider` is denied; that does not matter, because the bootstrap stack only builds the provider's ARN and never reads it. The deploy fails at the login step if the provider is missing.
+
 This needs the account's GitHub OIDC provider (`token.actions.githubusercontent.com`) to exist. If it does not, create it once in IAM (audience `sts.amazonaws.com`); the bootstrap stack references it and does not create it. The deploying identity also needs permission to create a role named `product-service-deploy-role`; [iam/product-service-iam-policy.json](iam/product-service-iam-policy.json) allows roles named `product-service-*`.
 
 ### 4. Store the role ARN as a secret
