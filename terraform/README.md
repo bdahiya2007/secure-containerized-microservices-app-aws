@@ -122,7 +122,7 @@ flowchart LR
 | `network.tf` | VPC, public/private subnets, IGW, NAT, route tables, security groups |
 | `rds.tf` | DB subnet group and PostgreSQL 18 instance (password managed by Secrets Manager) |
 | `ecr.tf` | ECR repository and lifecycle policy |
-| `ecs.tf` | Log group, cluster, IAM roles, task definition, service, ALB, target group, listener |
+| `ecs.tf` | Log group, cluster and its capacity providers (`FARGATE`, `FARGATE_SPOT`), IAM roles, task definition, service, ALB, target group, listener |
 | `logging.tf` | Central private, encrypted S3 log bucket with per-prefix expiry, a bucket policy with one statement per writer, ALB logs (always on), and the optional CloudTrail trail and S3 access logging (switches) |
 | `monitoring.tf` | CloudWatch dashboard: ECS reserved and utilized CPU and memory, desired, running and pending task counts, ALB request count, 4XX and 5XX errors, response time and target health |
 | `autoscaling.tf` | Application Auto Scaling target (2 to 4 tasks) and two target-tracking policies: average CPU and ALB requests per task (a metric-math expression over both target groups when `enable_blue_green` is on) |
@@ -149,6 +149,9 @@ flowchart LR
 | `autoscaling_requests_per_target` | `500` | Requests per task per minute through the ALB that the scaler tries to hold |
 | `log_retention_days` | `30` | Days ALB and S3 access logs are kept in the central log bucket |
 | `cloudtrail_log_retention_days` | `90` | Days CloudTrail logs are kept |
+| `enable_fargate_spot` | `false` | Run part of the service on Fargate Spot with a capacity provider strategy: `fargate_base` on-demand tasks first, then the rest split by `fargate_weight` and `fargate_spot_weight`. **Replaces the ECS service** (short outage). See [docs/Fargate_Spot.md](../docs/Fargate_Spot.md) |
+| `fargate_base` | `1` | Tasks that always run on on-demand Fargate (1 to 100); at least one keeps the service up when Spot is reclaimed |
+| `fargate_weight` / `fargate_spot_weight` | `1` / `3` | Relative share of the tasks above the base on on-demand Fargate and on Fargate Spot (not both 0) |
 | `enable_blue_green` | `false` | Deploy with CodeDeploy blue/green (started by GitHub Actions) instead of ECS rolling updates. **Replaces the ECS service** (short outage). Creates a second target group, the CodeDeploy application, deployment group and service role. See [docs/CICD.md](../docs/CICD.md) |
 | `codedeploy_deployment_config` | `CodeDeployDefault.ECSLinear10PercentEvery1Minutes` | How CodeDeploy shifts traffic (only with `enable_blue_green`) |
 | `codedeploy_blue_termination_minutes` | `5` | Minutes the old tasks keep running after the switch, for an instant rollback |

@@ -158,7 +158,7 @@ Trivy skips vulnerabilities that have no fixed version yet (`--ignore-unfixed`),
 | No stored AWS keys | GitHub OIDC; credentials last about an hour |
 | Trust policy | Audience `sts.amazonaws.com`, subject pinned to this repository by immutable owner and repository ID, and to the `dev` GitHub environment. Pull requests, other branches and forks cannot match |
 | Pull requests have no AWS access | `validate.yml` uses no credentials and `permissions: contents: read` |
-| Deploy role is narrow | ECR push to one repository, register task definitions, PassRole only for the project's two ECS roles and only to `ecs-tasks.amazonaws.com`, create deployments only for one CodeDeploy deployment group. No Terraform, S3, RDS, VPC or IAM-change permissions |
+| Deploy role is narrow | ECR push to one repository, register task definitions, PassRole only for the project's two ECS roles and only to `ecs-tasks.amazonaws.com`, `ecs:DescribeServices` on the one service (to read its Fargate / Fargate Spot strategy), create deployments only for one CodeDeploy deployment group. No Terraform, S3, RDS, VPC or IAM-change permissions |
 | Role cannot change itself | Explicit deny on `iam:*` for its own role. The role is created by the manually applied bootstrap stack, never by the pipeline |
 | Only reviewed code deploys | `main` requires a pull request and the six checks, administrators included; the `dev` environment accepts protected branches only |
 | Supply chain | Every action is pinned to a full commit SHA (enforced by the repository setting and by `scripts/check-appspec.py`); Dependabot proposes updates weekly; `npm ci` installs the exact lock file; `npm audit` fails on high findings; the ECR scan gates the deployment |

@@ -12,6 +12,30 @@ resource "aws_ecs_cluster" "main" {
   }
 }
 
+# Fargate and Fargate Spot as capacity providers. Registering both is free and changes nothing by itself: services
+# keep running on the launch type or strategy they name. The cluster default is on-demand Fargate only, so
+# anything that names no strategy never lands on Spot by accident.
+resource "aws_ecs_cluster_capacity_providers" "main" {
+  cluster_name       = aws_ecs_cluster.main.name
+  capacity_providers = ["FARGATE", "FARGATE_SPOT"]
+
+  default_capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 1
+  }
+}
+
+locals {
+  # The service's capacity provider strategy when enable_fargate_spot is on. ECS places the first fargate_base tasks on
+  # on-demand Fargate (they survive a Spot interruption), then splits the rest by weight. With the defaults (base 1,
+  # weights 1 and 3) a service of 2 tasks runs 1 on-demand and 1 Spot; at 4 tasks, 2 and 2 or 1 and 3.
+  capacity_provider_strategy = [
+    { name = "FARGATE", base = var.fargate_base, weight = var.fargate_weight },
+    { name = "FARGATE_SPOT", base = 0, weight = var.fargate_spot_weight },
+  ]
+}
+
 # ---- IAM ----
 data "aws_caller_identity" "current" {}
 
@@ -127,7 +151,22 @@ resource "aws_ecs_service" "app" {
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app.arn
   desired_count   = var.desired_count
-  launch_type     = "FARGATE"
+
+  # A service uses either a launch type or a capacity provider strategy, never both
+  launch_type = var.enable_fargate_spot ? null : "FARGATE"
+
+  # Moving between a launch type and a strategy needs a new deployment (and replaces the service)
+  force_new_deployment = var.enable_fargate_spot
+
+  dynamic "capacity_provider_strategy" {
+    for_each = var.enable_fargate_spot ? local.capacity_provider_strategy : []
+
+    content {
+      capacity_provider = capacity_provider_strategy.value.name
+      base              = capacity_provider_strategy.value.base
+      weight            = capacity_provider_strategy.value.weight
+    }
+  }
 
   # Give new tasks time to start before the load balancer's health checks count against them
   health_check_grace_period_seconds = 60
@@ -150,7 +189,7 @@ resource "aws_ecs_service" "app" {
     container_port   = 3000
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.http, aws_ecs_cluster_capacity_providers.main]
 
   # Auto Scaling (autoscaling.tf) changes the desired count, so Terraform must not reset it
   lifecycle {

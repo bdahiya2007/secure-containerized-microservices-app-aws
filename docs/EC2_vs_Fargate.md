@@ -89,7 +89,7 @@ What decides it:
 - Start-up latency is critical and you can keep warm, image-cached capacity.
 - You already operate a fleet and the tooling for it.
 
-**A mix is common.** An ECS cluster can have both: for example Fargate for the web tier and EC2 (or Fargate Spot) for batch or GPU work, using capacity providers to split the load.
+**A mix is common.** An ECS cluster can have both (and Fargate itself can be split between on-demand and Spot; see [Fargate_Spot.md](Fargate_Spot.md)): for example Fargate for the web tier and EC2 (or Fargate Spot) for batch or GPU work, using capacity providers to split the load.
 
 ## Why this project uses Fargate
 

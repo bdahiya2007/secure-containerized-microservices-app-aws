@@ -17,6 +17,7 @@ locals {
     "arn:aws:iam::${local.account_id}:role/${var.project_name}-execution",
     "arn:aws:iam::${local.account_id}:role/${var.project_name}-task",
   ]
+  ecs_service_arn    = "arn:aws:ecs:${local.region}:${local.account_id}:service/${var.project_name}-cluster/${var.project_name}"
   codedeploy_app_arn = "arn:aws:codedeploy:${local.region}:${local.account_id}:application:${var.project_name}"
   codedeploy_dg_arn  = "arn:aws:codedeploy:${local.region}:${local.account_id}:deploymentgroup:${var.project_name}/${var.project_name}-dg"
 }
@@ -111,6 +112,13 @@ data "aws_iam_policy_document" "deploy" {
       "codedeploy:GetDeployment",
     ]
     resources = [local.codedeploy_dg_arn]
+  }
+
+  # Read the service's capacity provider strategy (Fargate / Fargate Spot mix) so the deployment can follow it
+  statement {
+    sid       = "ReadTheServiceStrategy"
+    actions   = ["ecs:DescribeServices"]
+    resources = [local.ecs_service_arn]
   }
 
   statement {

@@ -29,6 +29,7 @@ on:
     paths:
       - 'product-service/**'
       - 'appspec.yaml'
+      - 'scripts/render-appspec.py'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
@@ -169,7 +170,12 @@ jobs:
         env:
           TASK_DEFINITION_ARN: ${{ steps.taskdef.outputs.arn }}
         run: |
-          sed "s|<TASK_DEFINITION>|${TASK_DEFINITION_ARN}|" appspec.yaml > appspec.rendered.yaml
+          # With enable_fargate_spot the service runs on a capacity provider strategy (Fargate plus Fargate Spot);
+          # copy it into the appspec so the tasks CodeDeploy starts use the same mix. Empty means a launch type.
+          strategy=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+                       --query 'services[0].capacityProviderStrategy' --output json)
+          echo "Capacity provider strategy: ${strategy}"
+          python3 -I scripts/render-appspec.py "$TASK_DEFINITION_ARN" "$strategy" > appspec.rendered.yaml
           jq -n --rawfile content appspec.rendered.yaml '{revisionType: "AppSpecContent", appSpecContent: {content: $content}}' > revision.json
           id=$(aws deploy create-deployment \
                  --application-name "$CODEDEPLOY_APP" \

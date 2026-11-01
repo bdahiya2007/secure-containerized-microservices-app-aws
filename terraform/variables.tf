@@ -126,3 +126,47 @@ variable "codedeploy_blue_termination_minutes" {
   type        = number
   default     = 5
 }
+
+variable "enable_fargate_spot" {
+  description = "Run part of the service on Fargate Spot (discounted, can be interrupted with a 2-minute warning) using a capacity provider strategy. Changing it replaces the ECS service (a short outage), so it is off by default. See docs/Fargate_Spot.md."
+  type        = bool
+  default     = false
+}
+
+variable "fargate_base" {
+  description = "Tasks that always run on on-demand Fargate (only used when enable_fargate_spot is true). At least 1, so the service keeps running when Spot capacity is reclaimed."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.fargate_base >= 1 && var.fargate_base <= 100
+    error_message = "fargate_base must be between 1 and 100: at least one on-demand task keeps the service available when Spot capacity is reclaimed."
+  }
+}
+
+variable "fargate_weight" {
+  description = "Relative share of the tasks above the base that run on on-demand Fargate (only used when enable_fargate_spot is true)"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.fargate_weight >= 0 && var.fargate_weight <= 1000
+    error_message = "fargate_weight must be between 0 and 1000."
+  }
+}
+
+variable "fargate_spot_weight" {
+  description = "Relative share of the tasks above the base that run on Fargate Spot (only used when enable_fargate_spot is true). 3 with a fargate_weight of 1 means about three Spot tasks for every on-demand one."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.fargate_spot_weight >= 0 && var.fargate_spot_weight <= 1000
+    error_message = "fargate_spot_weight must be between 0 and 1000."
+  }
+
+  validation {
+    condition     = var.fargate_weight + var.fargate_spot_weight > 0
+    error_message = "fargate_weight and fargate_spot_weight cannot both be 0: ECS rejects a strategy whose weights are all zero."
+  }
+}
