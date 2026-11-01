@@ -16,6 +16,7 @@ function create({ secretArn = process.env.DB_SECRET_ARN, env = process.env, clie
   let cached = null;
   let inflight = null;
   let fetchedAt = 0;
+  let version = 0; // counts how many times the secret has been loaded, so a caller can tell whether it changed
 
   function getClient() {
     if (!client) {
@@ -49,6 +50,7 @@ function create({ secretArn = process.env.DB_SECRET_ARN, env = process.env, clie
         .then((value) => {
           cached = value;
           fetchedAt = now();
+          version += 1;
           logger.info('Database credentials loaded from Secrets Manager');
           return value;
         })
@@ -60,6 +62,10 @@ function create({ secretArn = process.env.DB_SECRET_ARN, env = process.env, clie
   return {
     // True when the credentials come from Secrets Manager, so a failed login can be retried with a fresh copy
     canRefresh: () => Boolean(secretArn),
+
+    // Changes every time the secret is loaded. A query that failed to log in compares it with the value from before it
+    // started: if it changed, another request has already fetched the new password, so a retry is worthwhile.
+    version: () => version,
 
     async get() {
       if (!secretArn) return { username: env.DB_USER, password: env.DB_PASSWORD };

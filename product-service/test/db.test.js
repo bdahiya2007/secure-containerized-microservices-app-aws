@@ -10,18 +10,25 @@ logger.setSink(() => {});
 
 const PW = ['not', 'a', 'real', 'password'].join('-'); // made up
 
-function setup({ queryResults, canRefresh = true, refreshResults = [true] }) {
-  const state = { refreshCalls: 0, pools: [], queries: 0 };
+function setup({ queryResults, canRefresh = true, refreshResults = [true], versionBumpedByOthers = false }) {
+  const state = { refreshCalls: 0, pools: [], queries: 0, version: 1 };
   const creds = {
     canRefresh: () => canRefresh,
     get: async () => ({ username: 'dbadmin', password: PW }),
-    refresh: async () => refreshResults[Math.min(state.refreshCalls++, refreshResults.length - 1)],
+    version: () => state.version,
+    refresh: async () => {
+      const result = refreshResults[Math.min(state.refreshCalls++, refreshResults.length - 1)];
+      if (result) state.version += 1;
+      return result;
+    },
   };
   class FakePool {
     constructor(config) { state.config = config; state.pools.push(this); }
     on() {}
     async query() {
       const next = queryResults[Math.min(state.queries++, queryResults.length - 1)];
+      // Another request fetches the new password while this one is failing (a burst of parallel requests after a rotation)
+      if (next instanceof Error && versionBumpedByOthers) state.version += 1;
       if (next instanceof Error) throw next;
       return next;
     }
@@ -80,4 +87,45 @@ test('end() closes the pool, and it is safe to call without one', async () => {
   await db.query('SELECT 1');
   await db.end();
   assert.equal(state.ended, true);
+});
+
+test('a request that failed after another request already refreshed the secret is retried without fetching again', async () => {
+  // This is what a burst of parallel requests does after a rotation: the first failure triggers the fetch, and the others,
+  // failing a moment later, find the secret already fresh (refresh() would decline). They must still retry.
+  const { state, db } = setup({ queryResults: [authError(), { rows: [{ ok: 1 }] }], refreshResults: [false], versionBumpedByOthers: true });
+  assert.deepEqual(await db.query('SELECT 1'), { rows: [{ ok: 1 }] });
+  assert.equal(state.refreshCalls, 0, 'no second fetch');
+  assert.equal(state.queries, 2);
+});
+
+test('twenty parallel requests that all fail with the old password all succeed after one refresh', async () => {
+  let failures = 0;
+  const state = { version: 1, fetches: 0 };
+  let inflight = null;
+  const creds = {
+    canRefresh: () => true,
+    get: async () => ({ username: 'dbadmin', password: PW }),
+    version: () => state.version,
+    // Like the real one: one shared fetch, and a decline when the secret was fetched a moment ago
+    refresh: async () => {
+      if (inflight) { await inflight; return true; }
+      if (state.fetches > 0) return false;
+      inflight = new Promise((resolve) => setTimeout(resolve, 20)).then(() => { state.fetches += 1; state.version += 1; inflight = null; });
+      await inflight;
+      return true;
+    },
+  };
+  class FakePool {
+    on() {}
+    async query() {
+      if (state.version === 1) { failures += 1; throw authError(); } // still the old password
+      return { rows: [{ ok: 1 }] };
+    }
+    async end() {}
+  }
+  const db = createDb({ credentials: creds, PoolImpl: FakePool, env: {} });
+  const results = await Promise.allSettled(Array.from({ length: 20 }, () => db.query('SELECT 1')));
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 20);
+  assert.equal(state.fetches, 1);
+  assert.ok(failures >= 20);
 });

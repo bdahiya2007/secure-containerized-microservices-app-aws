@@ -2,7 +2,7 @@
 
 The database credentials live in an AWS Secrets Manager secret, and the application fetches them itself at runtime. No password or username is in the source code, the Docker image, the task definition, the Terraform variables or the Terraform state, and none is passed to the container as an environment variable.
 
-> **Status (2026-11-01): written and tested offline; not applied to AWS.** The code, the Terraform plan, the unit tests (25 pass) and the verify checks are done. Nothing has been deployed with this change yet, so the live service still uses the earlier arrangement (ECS injects the password at task start). The rollout order is in [Roll it out](#roll-it-out).
+> **Status (2026-11-01): deployed; a live rotation test found and fixed one bug.** The tasks read the secret themselves (rollout done, verify checks pass). A forced rotation showed the retry path works but lost some parallel requests; the fix is written and unit-tested and has **not yet been re-tested against a live rotation**. Details in [Live rotation test](#live-rotation-test). Phase 2 (removing the execution role's copy of the permission) is still to do.
 
 ## The secret
 
@@ -113,7 +113,7 @@ curl -s http://$(terraform -chdir=terraform output -raw alb_dns_name)/products |
 
 `verify-deployment.sh` has three checks for this: the task role can only read the one database secret, the running task definition holds no credentials, and (as advice, not a failure) the execution role no longer has the permission.
 
-### Test a rotation (optional)
+### Test a rotation
 
 This forces a rotation now. Running tasks should log one `Database login failed, retrying with the current secret` warning and carry on; `/health` and `/products` should keep returning 200 (a request in flight at that exact moment can fail once).
 
@@ -123,7 +123,23 @@ aws logs tail /ecs/product-service --since 10m --filter-pattern '"retrying with 
 curl -s -o /dev/null -w "%{http_code}\n" http://$(terraform -chdir=terraform output -raw alb_dns_name)/health
 ```
 
-This has not been run yet. The unit tests cover the retry logic with fakes; they do not prove the behaviour against real RDS and Secrets Manager.
+The unit tests cover the retry logic with fakes; only a live test shows the behaviour against real RDS and Secrets Manager. It was run once, with the result below. To exercise the retry path, send a burst of parallel requests right after the rotation (for example `seq 1 40 | xargs -P 20 -I{} curl -s -o /dev/null -w "%{http_code}\n" http://$ALB/products | sort | uniq -c`): a steady trickle of requests keeps the one open database connection busy, and an open connection stays valid after a rotation, so nothing would fail.
+
+## Live rotation test
+
+Run on 2026-11-01 against the deployed service (2 tasks), with `modify-db-instance --rotate-master-user-password --apply-immediately`.
+
+| | Result |
+|---|---|
+| The rotation | Took about 70 seconds. The secret got a new `AWSCURRENT` version and kept the old one as `AWSPREVIOUS`. The database stayed `available` |
+| A request every 2 seconds during it | All returned 200 (51 of 51): the open connection kept working, because a rotation does not end existing sessions |
+| A burst of 40 requests, 20 at a time, right after | **34 returned 200 and 6 returned 500** (`password authentication failed`). The app logged the refresh (`Database credentials loaded from Secrets Manager`) and `Database login failed, retrying with the current secret` |
+
+**The bug:** the burst makes the pool open new connections, which log in with the old cached password and fail. The first failure fetched the new secret, and the retry worked. But requests that failed a moment later found the secret already fetched within the last 10 seconds, so the refresh step said "no need to fetch again" and the code also skipped the retry, even though a retry would have succeeded. Those requests returned 500.
+
+**The fix:** the credentials module counts how many times the secret has been loaded (`version()`). A failed query now retries if the secret changed since the query started, and only fetches when it had not. Two new unit tests cover it; the one that reproduces the case fails on the old code and passes on the new code. After the fix is deployed, repeat the test above: expect every request in the burst to return 200.
+
+**What this says about the original design:** a plain rotation is harmless for a service with a steady trickle of requests, because open connections keep working. The risk is the moment the pool needs a new connection (a burst of traffic, an idle connection timing out, a database restart or failover) while the cached password is stale. That is what the retry covers.
 
 ## Debug
 
@@ -148,7 +164,7 @@ This has not been run yet. The unit tests cover the retry logic with fakes; they
 ## Limits and next steps
 
 - **Not deployed or tested in AWS yet.** The first rollout may need fixes, and the rotation behaviour needs the real test above.
-- **The retry covers one failed login.** A request that arrives in the brief window while RDS changes the password can still fail once; the next request recovers.
+- **The retry covers one failed login per request.** A request that arrives in the brief window while RDS changes the password can still fail once; the next request recovers. (The first version also lost requests in a burst; see the live rotation test.)
 - **No VPC endpoint for Secrets Manager.** Calls go out through the NAT gateway. An interface endpoint would keep the traffic inside the VPC and costs about $0.01 an hour per endpoint per zone.
 - **No resource policy on the secret.** Access is controlled by IAM only. A policy that denies everyone but the task role (and administrators) would be a second lock.
 - **The username is read from the secret once per task start.** RDS does not change the master username, so this is enough.
