@@ -212,10 +212,10 @@ Everything above was verified on 2026-10-31. These later changes were deployed t
 | **Two target groups** | The request-based scaling policy and the dashboard now cover both target groups; the verify script follows the listener. Applied; the scaling expression has not been seen under load |
 | **Fargate, not EC2** ([EC2_vs_Fargate.md](EC2_vs_Fargate.md)) | The service and every task report the `FARGATE` launch type, the task definition is Fargate-only with `awsvpc`, and the cluster has no EC2 capacity. Checked by `verify-deployment.sh` |
 | **Database credentials read at runtime** ([Secrets.md](Secrets.md)) | The running task definition holds no credential (only the secret's name); both tasks logged `Database credentials loaded from Secrets Manager`; no access-denied or login errors; `/products` returned the 3 products |
-| **Forced password rotation** | Took about 70 seconds. A request every 2 seconds all returned 200 (51 of 51). A burst of 40 parallel requests right after returned 34 × 200 and 6 × 500: a retry race, fixed in code (unit-tested; **not yet re-tested live**) |
+| **Forced password rotation** | Took about 70 seconds. A request every 2 seconds all returned 200 (51 of 51). A burst of 40 parallel requests right after returned 34 × 200 and 6 × 500: a retry race. After the fix a second rotation returned 40 of 40, then 60 of 60 parallel requests and 39 of 39 steady requests with status 200 (9 retries logged, no errors) |
 | **Verify script** | 31 passed, 0 failed, 1 skipped at the time of the runtime-secret rollout (33 checks; the one advisory warning was the execution role's temporary secret access, removed in phase 2) |
 
-**Still not tested:** a rollback of a bad deployment, scaling under real load, stopping a task, and the rotation fix against a live rotation.
+**Still not tested:** a rollback of a bad deployment, scaling under real load, stopping a task, and a rotation under sustained heavy load or during a deployment.
 
 ## Teardown
 

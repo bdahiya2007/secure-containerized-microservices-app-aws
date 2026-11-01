@@ -2,7 +2,7 @@
 
 The database credentials live in an AWS Secrets Manager secret, and the application fetches them itself at runtime. No password or username is in the source code, the Docker image, the task definition, the Terraform variables or the Terraform state, and none is passed to the container as an environment variable.
 
-> **Status (2026-11-01): deployed; a live rotation test found and fixed one bug.** The tasks read the secret themselves (rollout done, verify checks pass). A forced rotation showed the retry path works but lost some parallel requests; the fix is written and unit-tested and has **not yet been re-tested against a live rotation**. Details in [Live rotation test](#live-rotation-test). Phase 2 (removing the execution role's copy of the permission) is written in the pull request that adds it and applied once its plan shows exactly one destroy.
+> **Status (2026-11-01): deployed and tested live, including a forced password rotation.** The tasks read the secret themselves (rollout and phase 2 done, verify checks pass). A first rotation test found a retry race that lost 6 of 40 parallel requests; after the fix, a second rotation test returned 100 of 100 parallel requests and 39 of 39 steady requests with status 200. Details in [Live rotation test](#live-rotation-test).
 
 ## The secret
 
@@ -143,7 +143,20 @@ Run on 2026-11-01 against the deployed service (2 tasks), with `modify-db-instan
 
 **The bug:** the burst makes the pool open new connections, which log in with the old cached password and fail. The first failure fetched the new secret, and the retry worked. But requests that failed a moment later found the secret already fetched within the last 10 seconds, so the refresh step said "no need to fetch again" and the code also skipped the retry, even though a retry would have succeeded. Those requests returned 500.
 
-**The fix:** the credentials module counts how many times the secret has been loaded (`version()`). A failed query now retries if the secret changed since the query started, and only fetches when it had not. Two new unit tests cover it; the one that reproduces the case fails on the old code and passes on the new code. After the fix is deployed, repeat the test above: expect every request in the burst to return 200.
+**The fix:** the credentials module counts how many times the secret has been loaded (`version()`). A failed query now retries if the secret changed since the query started, and only fetches when it had not. Two new unit tests cover it; the one that reproduces the case fails on the old code and passes on the new code. The re-test after the fix is below.
+
+### Re-test after the fix
+
+Run on 2026-11-01 against the deployed fix (task definition revision 9), same method: force a rotation, a request every 2 seconds in the background, then bursts of parallel requests right after the secret became `active`.
+
+| | Before the fix | After the fix |
+|---|---|---|
+| Steady requests during the rotation | 51 of 51 returned 200 | 39 of 39 returned 200 |
+| Burst of 40 requests, 20 at a time | 34 × 200 and **6 × 500** | **40 × 200** |
+| Burst of 60 requests, 30 at a time | not run | **60 × 200** |
+| App log | refresh and retries, plus `Failed to fetch products` errors | 2 credential loads (one per task) and 9 `retrying with the current secret` warnings, no errors |
+
+So the retries that used to be lost now all recover. The rotation took about 70 seconds again. This covers a burst of up to 30 parallel requests against 2 tasks right after a rotation; it does not cover sustained heavy load or a rotation during a deployment.
 
 **What this says about the original design:** a plain rotation is harmless for a service with a steady trickle of requests, because open connections keep working. The risk is the moment the pool needs a new connection (a burst of traffic, an idle connection timing out, a database restart or failover) while the cached password is stale. That is what the retry covers.
 
@@ -170,7 +183,7 @@ Run on 2026-11-01 against the deployed service (2 tasks), with `modify-db-instan
 ## Limits and next steps
 
 - **Not deployed or tested in AWS yet.** The first rollout may need fixes, and the rotation behaviour needs the real test above.
-- **The retry covers one failed login per request.** A request that arrives in the brief window while RDS changes the password can still fail once; the next request recovers. (The first version also lost requests in a burst; see the live rotation test.)
+- **The retry covers one failed login per request.** A request that arrives in the brief window while RDS changes the password can still fail once; the next request recovers. In the live test after the fix no request failed, but that is two bursts, not a guarantee.
 - **No VPC endpoint for Secrets Manager.** Calls go out through the NAT gateway. An interface endpoint would keep the traffic inside the VPC and costs about $0.01 an hour per endpoint per zone.
 - **No resource policy on the secret.** Access is controlled by IAM only. A policy that denies everyone but the task role (and administrators) would be a second lock.
 - **The username is read from the secret once per task start.** RDS does not change the master username, so this is enough.
