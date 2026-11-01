@@ -182,6 +182,7 @@ terraform/
 docs/
 ├── runbook.md                    # deploy, verify, release, roll back, troubleshoot, tear down
 ├── ECR_Runbook.md                # create the ECR repository, authenticate Docker, build, tag and push the image
+├── Fargate_Spot.md               # Fargate + Fargate Spot capacity providers (enable_fargate_spot, off by default): design, high availability, enable and verify
 ├── EC2_vs_Fargate.md             # EC2 vs Fargate: differences, cost, trade-offs, when to use which, why Fargate here
 ├── Architecture.md               # end-to-end architecture diagrams, every AWS service, least privilege and defense in depth
 ├── E2E_Test_Results.md           # results of the first full deployment and verification in AWS
@@ -192,10 +193,11 @@ docs/
 ├── vulnerability-scan-report.md  # image and Terraform scan findings, remediation, before and after
 └── iam/product-service-iam-policy.json  # scoped IAM policy that lets a PowerUserAccess role create the stack's two ECS roles
 scripts/
+├── render-appspec.py     # fills the task definition (and the Fargate / Fargate Spot strategy) into appspec.yaml for a deployment
 ├── check-appspec.py      # offline check that appspec.yaml matches Terraform and every action is SHA-pinned
 ├── secret-scan.py        # secret and sensitive-data scanner (pre-commit hook)
 ├── install-hooks.sh      # enables the pre-commit hook for a clone
-└── verify-deployment.sh  # read-only check of a deployed stack: 31 checks on endpoints, security groups, IAM, logs, scaling
+└── verify-deployment.sh  # read-only check of a deployed stack: 33 checks on endpoints, security groups, IAM, logs, scaling
 .github/workflows/        # validate.yml (pull requests, no AWS access) and deploy.yml (push to main: build, push, CodeDeploy blue/green)
 .github/dependabot.yml    # weekly updates for GitHub Actions, npm packages, Docker base images and Terraform providers
 appspec.yaml              # CodeDeploy blue/green appspec (task definition placeholder filled in by deploy.yml)

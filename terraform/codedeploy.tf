@@ -28,6 +28,12 @@ resource "aws_lb_target_group" "green" {
   }
 }
 
+# Changes whenever the launch type or the capacity provider strategy changes. A CodeDeploy-controlled service cannot
+# change either in place, so the service below is replaced when this does (replace_triggered_by).
+resource "terraform_data" "capacity_strategy" {
+  input = var.enable_fargate_spot ? jsonencode(local.capacity_provider_strategy) : "launch-type-FARGATE"
+}
+
 # The same service as aws_ecs_service.app, but CodeDeploy controls its deployments.
 # The circuit breaker is not available with this controller; CodeDeploy's own rollback replaces it.
 resource "aws_ecs_service" "blue_green" {
@@ -37,7 +43,25 @@ resource "aws_ecs_service" "blue_green" {
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app.arn
   desired_count   = var.desired_count
-  launch_type     = "FARGATE"
+
+  # A service uses either a launch type or a capacity provider strategy, never both
+  launch_type = var.enable_fargate_spot ? null : "FARGATE"
+
+  # The provider requires this when a strategy changes. Strategy changes replace this service (see
+  # terraform_data.capacity_strategy), so no in-place update is ever sent.
+  force_new_deployment = var.enable_fargate_spot
+
+  # With a strategy, the same strategy must go into the appspec so that the tasks CodeDeploy starts follow it; the
+  # deploy workflow copies it from this service (see .github/workflows/deploy.yml).
+  dynamic "capacity_provider_strategy" {
+    for_each = var.enable_fargate_spot ? local.capacity_provider_strategy : []
+
+    content {
+      capacity_provider = capacity_provider_strategy.value.name
+      base              = capacity_provider_strategy.value.base
+      weight            = capacity_provider_strategy.value.weight
+    }
+  }
 
   health_check_grace_period_seconds = 60
 
@@ -57,14 +81,15 @@ resource "aws_ecs_service" "blue_green" {
     container_port   = 3000
   }
 
-  depends_on = [aws_lb_listener.http]
+  depends_on = [aws_lb_listener.http, aws_ecs_cluster_capacity_providers.main]
 
   # Each of these is changed by something other than Terraform:
   #  - desired_count: Auto Scaling (autoscaling.tf)
   #  - task_definition: every CodeDeploy deployment registers and switches to a new revision
   #  - load_balancer: CodeDeploy swaps the target group
   lifecycle {
-    ignore_changes = [desired_count, task_definition, load_balancer]
+    ignore_changes       = [desired_count, task_definition, load_balancer]
+    replace_triggered_by = [terraform_data.capacity_strategy]
   }
 }
 

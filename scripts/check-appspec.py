@@ -28,6 +28,26 @@ else:
     if f"container_port   = {port.group(1)}" not in ecs:
         errors.append(f"appspec.yaml: ContainerPort {port.group(1)} does not match codedeploy.tf")
 
+# The renderer: with and without a capacity provider strategy
+sys.path.insert(0, str(root / "scripts"))
+import importlib.util
+spec = importlib.util.spec_from_file_location("render_appspec", root / "scripts" / "render-appspec.py")
+render_appspec = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(render_appspec)
+SAMPLE_ACCOUNT = "0" * 12  # a made-up value, built here so no ARN-shaped literal with a 12-digit ID sits in the repo
+TD = f"arn:aws:ecs:us-east-1:{SAMPLE_ACCOUNT}:task-definition/product-service:1"
+plain = render_appspec.render(TD, "[]")
+if "<TASK_DEFINITION>" in plain or TD not in plain or "\n        CapacityProviderStrategy:" in plain:
+    errors.append("render-appspec.py: the plain rendering is wrong")
+spot = render_appspec.render(TD, '[{"capacityProvider":"FARGATE","weight":1,"base":1},{"capacityProvider":"FARGATE_SPOT","weight":3,"base":0}]')
+if "\n        CapacityProviderStrategy:" not in spot or "CapacityProvider: FARGATE_SPOT" not in spot or "Weight: 3" not in spot or "Base: 1" not in spot:
+    errors.append("render-appspec.py: the capacity provider strategy was not copied into the appspec")
+try:
+    render_appspec.render(TD, '[{"capacityProvider":"bad name","weight":1}]')
+    errors.append("render-appspec.py: an invalid capacity provider name was accepted")
+except ValueError:
+    pass
+
 for wf in sorted((root / ".github/workflows").glob("*.yml")):
     for no, line in enumerate(wf.read_text().splitlines(), 1):
         m = re.match(r"\s*-?\s*uses:\s*(\S+)", line)

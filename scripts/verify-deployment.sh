@@ -106,10 +106,19 @@ log_bucket_secure() {
 }
 ecr_ok() { [ "$(aws ecr describe-repositories --repository-names "$PROJECT" --query 'repositories[0].imageScanningConfiguration.scanOnPush' --output text)" = True ] && [ "$(aws ecr describe-images --repository-name "$PROJECT" --query 'length(imageDetails)' --output text)" -gt 0 ]; }
 
+# True when every line is blank, "None" (the CLI's word for an empty list) or one of the two Fargate capacity providers.
+only_fargate_providers() { awk 'NF && $0 != "None" && $0 != "FARGATE" && $0 != "FARGATE_SPOT" { bad = 1 } END { exit bad }'; }
 # Fargate, not EC2: the service and every running task use the FARGATE launch type, the task definition is Fargate-only
 # with awsvpc networking, and the cluster owns no EC2 capacity (no container instances, no capacity providers).
 fargate_launch_type() {
-  [ "$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].launchType' --output text)" = FARGATE ] || return 1
+  # A service on a launch type reports FARGATE; one on a capacity provider strategy (enable_fargate_spot) reports no launch
+  # type, and its strategy may name only FARGATE and FARGATE_SPOT. Its tasks report FARGATE either way.
+  local lt strategy
+  lt=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].launchType' --output text)
+  strategy=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].capacityProviderStrategy[].capacityProvider' --output text | tr '\t' '\n')
+  if [ "$lt" != FARGATE ]; then
+    [ -n "$strategy" ] && [ "$strategy" != None ] && echo "$strategy" | only_fargate_providers || return 1
+  fi
   local tasks t
   tasks=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" --query taskArns --output text)
   [ -n "$tasks" ] || return 1
@@ -122,7 +131,28 @@ fargate_task_definition() {
     | py 'import json,sys; c,n,r=json.load(sys.stdin); assert c==["FARGATE"] and n=="awsvpc" and r'
 }
 no_ec2_capacity() {
-  aws ecs describe-clusters --clusters "$CLUSTER" --query 'clusters[0].[registeredContainerInstancesCount,length(capacityProviders)]' --output text | grep -q '^0[[:space:]]0$'
+  # No EC2 container instances, and the only capacity providers are the two Fargate ones (registered by terraform/ecs.tf).
+  [ "$(aws ecs describe-clusters --clusters "$CLUSTER" --query 'clusters[0].registeredContainerInstancesCount' --output text)" = 0 ] \
+    && aws ecs describe-clusters --clusters "$CLUSTER" --query 'clusters[0].capacityProviders[]' --output text | tr '\t' '\n' | only_fargate_providers
+}
+
+# High availability: the running tasks are spread over at least two Availability Zones.
+tasks_in_two_azs() {
+  local tasks
+  tasks=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" --query taskArns --output text)
+  [ -n "$tasks" ] || return 1
+  # shellcheck disable=SC2086
+  [ "$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks $tasks --query 'tasks[].availabilityZone' --output text | tr '\t' '\n' | sort -u | wc -l)" -ge 2 ]
+}
+# Fargate Spot (only when enable_fargate_spot is on): the strategy keeps at least one on-demand task as a base, and at
+# least one running task is on-demand FARGATE, so the service survives a Spot interruption.
+SPOT_STRATEGY=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].capacityProviderStrategy' --output json 2>/dev/null)
+fargate_spot_strategy() {
+  echo "$SPOT_STRATEGY" | py 'import json,sys; s=json.load(sys.stdin); d={i["capacityProvider"]:i for i in s}; assert d["FARGATE"]["base"]>=1 and "FARGATE_SPOT" in d and d["FARGATE_SPOT"]["weight"]>=1'
+  local tasks
+  tasks=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" --query taskArns --output text)
+  # shellcheck disable=SC2086
+  aws ecs describe-tasks --cluster "$CLUSTER" --tasks $tasks --query 'tasks[].capacityProviderName' --output text | tr '\t' '\n' | grep -qx FARGATE
 }
 
 echo "Verifying $PROJECT in $AWS_REGION (read-only)"
@@ -154,7 +184,13 @@ check "Task role has NO permissions (no attached or inline policies)" task_role_
 echo "--- Fargate (no EC2)"
 check "Service and every running task use the FARGATE launch type" fargate_launch_type
 check "Task definition is Fargate-only with awsvpc networking and an execution role" fargate_task_definition
-check "Cluster has no EC2 container instances and no capacity providers" no_ec2_capacity
+check "Cluster has no EC2 container instances and only the Fargate capacity providers" no_ec2_capacity
+check "Tasks run in at least two Availability Zones" tasks_in_two_azs
+if [ -n "$SPOT_STRATEGY" ] && [ "$SPOT_STRATEGY" != "[]" ] && [ "$SPOT_STRATEGY" != "null" ]; then
+  check "Fargate Spot: on-demand base of at least 1, a Spot share, and an on-demand task running" fargate_spot_strategy
+else
+  skip "Fargate Spot is not enabled (enable_fargate_spot = false)"
+fi
 
 echo "--- scaling, monitoring and registry"
 check "Auto Scaling target and policies exist" scaling_configured

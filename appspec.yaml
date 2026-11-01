@@ -1,6 +1,7 @@
 # CodeDeploy blue/green for ECS. The deploy workflow replaces <TASK_DEFINITION> with the ARN of the
 # task definition revision it just registered, then passes this file to `aws deploy create-deployment`.
-# ContainerName and ContainerPort must match the load_balancer block of the ECS service (terraform/codedeploy.tf).
+# When the service runs on a capacity provider strategy (enable_fargate_spot), scripts/render-appspec.py also adds a
+# CapacityProviderStrategy list here, copied from the service. ContainerName and ContainerPort must match the load_balancer block of the ECS service (terraform/codedeploy.tf).
 version: 0.0
 Resources:
   - TargetService:
