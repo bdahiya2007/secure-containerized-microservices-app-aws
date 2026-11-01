@@ -123,10 +123,20 @@ jobs:
           docker push "$image"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
 
-      # ECR scans on push. A CRITICAL finding stops the deployment (the image stays in ECR for inspection).
+      # ECR scans on push. The scan record appears a few seconds after the push, and `aws ecr wait
+      # image-scan-complete` fails at once with ScanNotFoundException before that, so poll instead (up to 5 minutes).
+      # A CRITICAL finding stops the deployment (the image stays in ECR for inspection).
       - name: Wait for the ECR scan and stop on CRITICAL findings
         run: |
-          aws ecr wait image-scan-complete --repository-name "$ECR_REPOSITORY" --image-id imageTag="$GITHUB_SHA"
+          status=PENDING
+          for _ in $(seq 1 30); do
+            status=$(aws ecr describe-image-scan-findings --repository-name "$ECR_REPOSITORY" --image-id imageTag="$GITHUB_SHA" \
+                       --query 'imageScanStatus.status' --output text 2>/dev/null || echo PENDING)
+            [ "$status" = COMPLETE ] && break
+            if [ "$status" = FAILED ]; then echo "::error::The ECR scan failed."; exit 1; fi
+            sleep 10
+          done
+          if [ "$status" != COMPLETE ]; then echo "::error::The ECR scan did not finish within 5 minutes (last status: ${status})."; exit 1; fi
           counts=$(aws ecr describe-image-scan-findings --repository-name "$ECR_REPOSITORY" --image-id imageTag="$GITHUB_SHA" \
                      --query 'imageScanFindings.findingSeverityCounts' --output json)
           echo "Scan findings by severity: ${counts}"
