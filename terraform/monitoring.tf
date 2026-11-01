@@ -185,10 +185,14 @@ resource "aws_cloudwatch_dashboard" "main" {
           view    = "timeSeries"
           stacked = false
           period  = 60
-          metrics = flatten([for g in local.dash_tgs : [
-            ["AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", g.suffix, "LoadBalancer", local.dash_lb, { stat = "Average", label = "Healthy (${g.name})" }],
-            ["AWS/ApplicationELB", "UnHealthyHostCount", "TargetGroup", g.suffix, "LoadBalancer", local.dash_lb, { stat = "Average", label = "Unhealthy (${g.name})" }],
-          ]])
+          metrics = concat(
+            [for g in local.dash_tgs :
+              ["AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", g.suffix, "LoadBalancer", local.dash_lb, { stat = "Average", label = "Healthy (${g.name})" }]
+            ],
+            [for g in local.dash_tgs :
+              ["AWS/ApplicationELB", "UnHealthyHostCount", "TargetGroup", g.suffix, "LoadBalancer", local.dash_lb, { stat = "Average", label = "Unhealthy (${g.name})" }]
+            ],
+          )
         }
       },
     ]
