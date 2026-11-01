@@ -113,25 +113,37 @@ reads the database password from Secrets Manager, and starts the container with 
 ## 3. Build and deploy flow
 
 ```mermaid
-flowchart LR
-  code["Source code<br/>Node.js, Dockerfile, Terraform"] --> hook["Pre-commit secret scan<br/>and .gitignore"]
-  hook --> build["docker build<br/>multi-stage, plain Alpine,<br/>production dependencies only"]
-  build --> scan["Scans<br/>Trivy image, npm audit,<br/>Trivy config, Checkov"]
-  scan --> push["docker push to ECR<br/>login with a 12-hour token"]
-  push --> tf["terraform plan, review, apply<br/>saved plan, scoped IAM policy"]
-  tf --> run["ECS pulls the image,<br/>rolling deploy with circuit breaker"]
-  run --> mig["Run the migration task once"]
-  mig --> verify["Verify: health, products,<br/>logs, dashboard"]
+flowchart TB
+  subgraph A["1. Before merge: no AWS access"]
+    direction LR
+    code["Source code<br/>Node.js, Dockerfile,<br/>Terraform"] --> hook["Pre-commit<br/>secret scan"]
+    hook --> pr["Pull request checks<br/>secrets, Semgrep, npm audit,<br/>Trivy, Checkov, unit tests"]
+    pr --> merge["Merge to main"]
+  end
+  subgraph B["2. GitHub Actions deploy: OIDC role, short-lived credentials"]
+    direction LR
+    build["docker build<br/>push to ECR,<br/>tag = commit SHA"] --> ecrscan["ECR scan on push<br/>stop on CRITICAL"]
+    ecrscan --> td["Register a new<br/>task definition revision"]
+  end
+  subgraph C["3. CodeDeploy blue/green"]
+    direction LR
+    cd["Start green tasks,<br/>health check,<br/>shift 10% per minute"] --> done["Stop old tasks after<br/>5 minutes; automatic<br/>rollback on failure"]
+  end
+  A --> B --> C
+  tf["Infrastructure by hand:<br/>terraform plan, review, apply<br/>(S3 state, scoped IAM policy)"] -.-> C
 ```
+
+Infrastructure changes (Terraform) are still reviewed and applied by hand; the pipeline deploys only the application. Details: [CICD.md](CICD.md).
 
 | Stage | What it does | Security value |
 |---|---|---|
 | Secret scan and `.gitignore` | Blocks credentials, account IDs, personal data, state and key files from being committed | Keeps secrets out of the repository |
 | Multi-stage build | Installs dependencies in a build stage and copies only the `node` binary, the modules and the app into plain Alpine; npm, npx, corepack and yarn never reach the final image | Smaller attack surface (220 MB, 0 known vulnerabilities) |
-| Scans | Trivy (image and Terraform), `npm audit`, Checkov | Findings fixed or recorded as reviewed exceptions: see [vulnerability-scan-report.md](vulnerability-scan-report.md) |
-| ECR push | Authenticated with a short-lived token; ECR scans each pushed image | Only authenticated principals can push |
-| `terraform plan -out`, then `apply` of the saved plan | What you reviewed is exactly what is applied | No surprise changes |
-| Rolling deploy | New tasks start before old ones stop; a failed deployment rolls back automatically | Safe releases |
+| Pull request checks | Secret scan, Semgrep (code), `npm audit` and Trivy (libraries, image, Dockerfile), Checkov (Terraform), unit tests; none has AWS access | Findings fixed or recorded as reviewed exceptions: see [vulnerability-scan-report.md](vulnerability-scan-report.md) |
+| GitHub Actions deploy | Authenticates through GitHub OIDC to a role limited to one ECR repository, task definitions and one CodeDeploy deployment group | No stored AWS keys; only reviewed code on `main` can assume the role |
+| ECR push and scan | Image tagged with the commit SHA; ECR scans it and the job stops on a CRITICAL finding | Each running image maps to one commit |
+| CodeDeploy blue/green | New tasks start in the idle target group and must pass the ALB health check before traffic shifts, 10% per minute; old tasks stay 5 minutes | Safe releases, automatic rollback on failure (rollback not yet exercised) |
+| `terraform plan -out`, then `apply` of the saved plan | What you reviewed is exactly what is applied (infrastructure, by hand) | No surprise changes |
 
 ## 4. AWS services and how each is secured
 
@@ -147,6 +159,8 @@ flowchart LR
 | **Amazon RDS for PostgreSQL** | Stores the products | PostgreSQL 18.6 on `db.t4g.micro`, 20 GB gp3, single-AZ, 7-day backups, tags copied to snapshots | In private subnets, **not publicly accessible**, encrypted at rest, reachable only from the app security group, no outbound rules |
 | **AWS Secrets Manager** | Holds the database credentials | RDS creates and manages the master password (`manage_master_user_password`); ECS injects it as `DB_PASSWORD` | No password in code, in the image, in Terraform variables or in state; the execution role can read this one secret only |
 | **AWS IAM** | Decides who and what can do what | Execution role, task role (empty), scoped deploy policy, service-linked roles | See [section 6](#6-least-privilege-who-can-do-what) |
+| **AWS CodeDeploy** | Blue/green deployments of the ECS service | Application and deployment group (`terraform/codedeploy.tf`, behind `enable_blue_green`); two target groups; linear 10% per minute; automatic rollback; service role limited to this account | Started only by the pipeline role |
+| **GitHub Actions + IAM OIDC** | Builds and deploys the application | Role `product-service-deploy-role` trusts only this repository (immutable owner and repository ID) in the `dev` environment; permissions are limited to the ECR repository, task definitions, two `PassRole` targets and one deployment group; created by a separately applied bootstrap stack | No stored AWS keys; the role cannot change itself |
 | **Application Auto Scaling** | Adds and removes tasks with load | Two target-tracking policies: CPU 60 percent and 500 requests per task per minute; 2 to 4 tasks; scale out after 60 seconds, scale in after 300 | Capped at 4 so database connections stay bounded (10 per task) |
 | **Amazon CloudWatch** | Logs, metrics, dashboard, scaling alarms | Container logs (14 days), Container Insights, an 8-chart dashboard, alarms created by Auto Scaling | Log groups have retention, so nothing is kept forever |
 | **Amazon S3** (log buckets) | Stores log files | One central bucket (`alb/`, `cloudtrail/`), and an optional separate bucket for S3 access logs | Public access fully blocked, SSE-S3 encryption, TLS-only policy, one narrow policy statement per writer, per-prefix expiry |
@@ -171,7 +185,7 @@ flowchart TB
       subgraph L3 ["3. Network segmentation"]
         s3["Private subnets, no public IPs, chained security groups,<br/>egress limited to 443 and 5432, database has no egress"]
         subgraph L4 ["4. Workload"]
-          s4["Non-root user, read-only filesystem, no npm, npx, corepack or yarn,<br/>empty task role, no ECS Exec, rolling deploys with rollback"]
+          s4["Non-root user, read-only filesystem, no npm, npx, corepack or yarn,<br/>empty task role, no ECS Exec, blue/green deploys with rollback"]
           subgraph L5 ["5. Data"]
             s5["Encrypted RDS, TLS in transit, managed secret, backups,<br/>private encrypted log buckets"]
             data[("Product data")]
@@ -195,7 +209,7 @@ flowchart TB
 | **1. Identity and governance** | SSO sign-in; the engineer's IAM policy limited to `product-service-*` roles; trust policies requiring `aws:SourceAccount` and `aws:SourceArn`; a budget alert | Stolen long-lived keys, privilege escalation through role creation, the confused-deputy problem, runaway cost |
 | **2. Perimeter** | The ALB is the only internet-facing resource; `alb_ingress_cidr` limits who can reach it; invalid headers are dropped | Direct access to tasks or the database, malformed-request attacks. *Gap: HTTP only, no authentication, no WAF.* |
 | **3. Network segmentation** | Tasks and database in private subnets with no public IPs; security groups that only accept the previous tier; app egress only to 443 and the database; no database egress; S3 gateway endpoint | Lateral movement, data exfiltration over unexpected ports, inbound connections to private resources |
-| **4. Workload** | Non-root `node` user; read-only root filesystem; minimal image with no npm, npx, corepack or yarn; empty task role; no ECS Exec; health checks; circuit breaker | A compromised container being able to write files, escalate, call AWS APIs, or stay broken after a bad release |
+| **4. Workload** | Non-root `node` user; read-only root filesystem; minimal image with no npm, npx, corepack or yarn; empty task role; no ECS Exec; health checks; CodeDeploy blue/green with automatic rollback (the ECS circuit breaker is used only when `enable_blue_green` is off) | A compromised container being able to write files, escalate, call AWS APIs, or stay broken after a bad release |
 | **5. Data** | RDS encrypted at rest and private; TLS to the database; password only in Secrets Manager; private encrypted S3 buckets with a TLS-only policy; 7-day backups | Reading data at rest or in transit, leaked credentials, public log buckets |
 | **Detection** | ALB access logs, CloudTrail with log file validation, RDS logs, S3 access logs, Container Insights, dashboard | Attacks and mistakes going unnoticed, and tampering with the audit trail |
 
@@ -313,7 +327,7 @@ The commands to turn each on and read it are in the [logging runbook](Logging_Ru
 |---|---|---|
 | Spread over zones | Tasks in two private subnets (two zones); ALB across two public subnets | 2 tasks per zone at 4 tasks in the test |
 | Scale out and in | Auto Scaling, 2 to 4 tasks, CPU and request-rate targets | Scale-out 2 to 4 within about 6 minutes of sustained load; scale-in began about 18 minutes after the load ended |
-| Safe releases | Rolling deployment, circuit breaker with rollback, 60-second grace period, 30-second drain | Configured; a rollback was not exercised |
+| Safe releases | CodeDeploy blue/green with automatic rollback, 60-second grace period, 30-second drain | Four successful deployments; the rollback path was not exercised |
 | Self-healing | ECS replaces failed tasks; the ALB health check stops sending traffic to an unhealthy one | Not yet tested by stopping a task |
 | Data durability | 7-day automated RDS backups | Not restored in a test |
 | **Gaps** | One NAT gateway (zone A) and a single-AZ database: a zone failure would affect outbound access or the database | |
@@ -331,7 +345,7 @@ These are deliberate demo trade-offs or work not yet done. The full table, with 
 | HTTPS egress to anywhere (443) | The remaining open outbound rule; interface VPC endpoints would remove it, at extra cost |
 | No alarms for errors or unhealthy targets | Failures are visible only if someone looks |
 | No distributed tracing; no Lambda in this project | X-Ray tracing would need the SDK and a sidecar; there is no Lambda function to trace |
-| Local Terraform state, no CI/CD pipeline, one environment | Manual and single-operator; see the README roadmap |
+| Infrastructure applied by hand, shared state bucket, one environment, `main` not protected while the repo is private | Single-operator; the pipeline deploys only the application; see the README roadmap |
 | One ALB 502 during a load test, cause probable but not proven | Node's 5-second keep-alive was shorter than the ALB's 60-second idle timeout; the fix is deployed (`server.js`), and a repeat 8-minute load test (33,600 requests) had zero 5XX, which is consistent with the fix but not proof |
 
 ## 12. Cost
