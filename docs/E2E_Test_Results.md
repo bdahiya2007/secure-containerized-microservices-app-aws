@@ -197,10 +197,25 @@ The normal end-to-end check of the fixed image (schema load, `/health`, `/produc
 
 - **Resilience:** stopping a task and watching ECS replace it, and a deployment rollback.
 - **TLS certificate verification:** the app encrypts the RDS connection but does not verify the certificate (a documented gap).
-- **HTTPS, authentication, multiple environments, alarms and a CI/CD pipeline:** not built; see the README's gaps table.
+- **HTTPS, authentication, multiple environments and alarms:** not built; see the README's gaps table. (A CI/CD pipeline was built afterwards: see the update below.)
 - **Performance:** nothing here measured latency or throughput. The Auto Scaling test above only shows that the service scales out.
 - **Scaling on real CPU load** (see the Auto Scaling section).
 - **Proof that the keep-alive fix removes the 502:** a repeat 8-minute test was clean but too short to be conclusive (see above).
+
+## Update 2026-11-01: pipeline, Fargate checks and runtime secrets
+
+Everything above was verified on 2026-10-31. These later changes were deployed to the same stack and checked in AWS.
+
+| Change | What was verified |
+|---|---|
+| **CI/CD with GitHub Actions and CodeDeploy blue/green** ([CICD.md](CICD.md)) | Six successful deployments: each built the image, passed the ECR scan gate, registered a task definition revision and shifted traffic 10% a minute (about 16 minutes), with `/health` and `/products` at 200 throughout. Four problems found on the way are listed in CICD.md (empty secret, draining service name, rollout check, ECR scan race), all fixed. The automatic rollback has **not** been exercised |
+| **Two target groups** | The request-based scaling policy and the dashboard now cover both target groups; the verify script follows the listener. Applied; the scaling expression has not been seen under load |
+| **Fargate, not EC2** ([EC2_vs_Fargate.md](EC2_vs_Fargate.md)) | The service and every task report the `FARGATE` launch type, the task definition is Fargate-only with `awsvpc`, and the cluster has no EC2 capacity. Checked by `verify-deployment.sh` |
+| **Database credentials read at runtime** ([Secrets.md](Secrets.md)) | The running task definition holds no credential (only the secret's name); both tasks logged `Database credentials loaded from Secrets Manager`; no access-denied or login errors; `/products` returned the 3 products |
+| **Forced password rotation** | Took about 70 seconds. A request every 2 seconds all returned 200 (51 of 51). A burst of 40 parallel requests right after returned 34 × 200 and 6 × 500: a retry race, fixed in code (unit-tested; **not yet re-tested live**) |
+| **Verify script** | 31 passed, 0 failed, 1 skipped at the time of the runtime-secret rollout (33 checks; the one advisory warning was the execution role's temporary secret access, removed in phase 2) |
+
+**Still not tested:** a rollback of a bad deployment, scaling under real load, stopping a task, and the rotation fix against a live rotation.
 
 ## Teardown
 

@@ -49,23 +49,8 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Allow ECS to inject the RDS-managed password into the container.
-# TEMPORARY: the app now reads the secret itself (see the task role below), and the new task definition no longer asks ECS
-# to inject it. This permission stays only until a deployment has moved every running task to the new task definition,
-# because tasks started from the old revision still need it. Then remove this resource (docs/Secrets.md, phase 2).
-resource "aws_iam_role_policy" "read_db_secret" {
-  name = "read-db-secret"
-  role = aws_iam_role.execution.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = aws_db_instance.main.master_user_secret[0].secret_arn
-    }]
-  })
-}
+# The execution role has no access to the database secret: the app reads it itself with the task role (below), and ECS no
+# longer injects it into the container (docs/Secrets.md).
 
 resource "aws_iam_role" "task" {
   name               = "${var.project_name}-task"

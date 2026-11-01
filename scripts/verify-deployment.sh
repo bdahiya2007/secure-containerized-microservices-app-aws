@@ -112,8 +112,7 @@ task_definition_has_no_credentials() {
   aws ecs describe-task-definition --task-definition "$td" --query 'taskDefinition.containerDefinitions[0].{env:environment[].name,secrets:secrets}' --output json \
     | py 'import json,sys; d=json.load(sys.stdin); env=d["env"] or []; assert not d["secrets"] and "DB_SECRET_ARN" in env and "DB_PASSWORD" not in env and "DB_USER" not in env'
 }
-# Advice, not a failure: after the first deployment of the version that reads the secret itself, the execution role's own
-# permission to read it can be removed (docs/Secrets.md, phase 2).
+# The execution role (ECS's own identity for starting a task) cannot read the database secret: only the task role can.
 execution_role_secret_access() { [ "$(aws iam list-role-policies --role-name "$PROJECT-execution" --query 'length(PolicyNames)' --output text)" = 0 ]; }
 scaling_configured() {
   aws application-autoscaling describe-scalable-targets --service-namespace ecs --resource-ids "service/$CLUSTER/$SERVICE" --query 'ScalableTargets[0].[MinCapacity,MaxCapacity]' --output text | grep -qE '^[0-9]+[[:space:]]+[0-9]+$' \
@@ -181,7 +180,7 @@ echo "--- IAM least privilege"
 check "Both ECS roles have the confused-deputy conditions" roles_conditions
 check "Task role can only read the one database secret (GetSecretValue on that ARN, nothing else)" task_role_reads_only_db_secret
 check "The running task definition holds no credentials (no secrets block, no DB_USER or DB_PASSWORD, only DB_SECRET_ARN)" task_definition_has_no_credentials
-if execution_role_secret_access; then pass "Execution role has no permission to read the secret"; else warn "Execution role can still read the database secret (remove it after the first deployment that reads it at runtime: docs/Secrets.md, phase 2)"; fi
+check "Execution role has no permission to read the database secret (only the task role can)" execution_role_secret_access
 
 echo "--- Fargate (no EC2)"
 check "Service and every running task use the FARGATE launch type" fargate_launch_type

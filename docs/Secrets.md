@@ -2,7 +2,7 @@
 
 The database credentials live in an AWS Secrets Manager secret, and the application fetches them itself at runtime. No password or username is in the source code, the Docker image, the task definition, the Terraform variables or the Terraform state, and none is passed to the container as an environment variable.
 
-> **Status (2026-11-01): deployed; a live rotation test found and fixed one bug.** The tasks read the secret themselves (rollout done, verify checks pass). A forced rotation showed the retry path works but lost some parallel requests; the fix is written and unit-tested and has **not yet been re-tested against a live rotation**. Details in [Live rotation test](#live-rotation-test). Phase 2 (removing the execution role's copy of the permission) is still to do.
+> **Status (2026-11-01): deployed; a live rotation test found and fixed one bug.** The tasks read the secret themselves (rollout done, verify checks pass). A forced rotation showed the retry path works but lost some parallel requests; the fix is written and unit-tested and has **not yet been re-tested against a live rotation**. Details in [Live rotation test](#live-rotation-test). Phase 2 (removing the execution role's copy of the permission) is written in the pull request that adds it and applied once its plan shows exactly one destroy.
 
 ## The secret
 
@@ -81,9 +81,15 @@ The change is in two phases, because tasks that were started from the old task d
 3. Deploy once more: `gh workflow run deploy.yml`. The workflow copies the latest task definition revision (the new one) and swaps in the image, so the tasks now read the secret themselves.
 4. Check (next section).
 
-**Phase 2: a follow-up change**
+**Phase 2: a follow-up change (done in its own pull request)**
 
-5. Remove `aws_iam_role_policy.read_db_secret` (the execution role's copy) from `terraform/ecs.tf` and apply. After this the execution role cannot read the secret. `verify-deployment.sh` warns until this is done.
+5. Remove `aws_iam_role_policy.read_db_secret` (the execution role's copy) from `terraform/ecs.tf` and apply:
+   ```bash
+   cd terraform
+   terraform plan      # expect: 0 add, 0 change, 1 destroy: aws_iam_role_policy.read_db_secret (the execution role's policy)
+   terraform apply
+   ```
+   After this the execution role cannot read the secret, and `verify-deployment.sh` checks for it. Do it only once the service runs the new task definition (the `verify-deployment.sh` check "The running task definition holds no credentials" passes) and no old revision is started by hand.
 
 If `enable_blue_green` is **off** (rolling updates), the service uses the Terraform-created revision directly, so push the new image as `:latest` **before** step 2 (see [runbook.md](runbook.md#4-deploy-a-new-version)); otherwise the apply would start old-image tasks with the new definition.
 
@@ -158,7 +164,7 @@ Run on 2026-11-01 against the deployed service (2 tasks), with `modify-db-instan
 - **Nothing sensitive is logged.** The app logs that the credentials were loaded and when a login is retried, never a value. A unit test fails if the password appears in any log line, and the existing log test checks that no log line contains a credential.
 - **Who read the secret is recorded.** With CloudTrail on (`enable_cloudtrail`), every `GetSecretValue` call is logged with the calling role.
 - **The secret stays in memory.** The container has a read-only root filesystem and no ECS Exec, so there is no shell to read it from and nowhere to write it to disk.
-- **The task role is the only reader.** The execution role's temporary copy of the permission goes away in phase 2.
+- **The task role is the only reader.** The execution role no longer has any access to it (phase 2).
 - **TLS to the database** is on (`DB_SSL`), but the server certificate is not verified yet; see the README gaps.
 
 ## Limits and next steps
