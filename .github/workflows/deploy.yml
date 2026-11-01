@@ -1,8 +1,8 @@
 name: Deploy
 
 # Builds the Product Service image, pushes it to the existing ECR repository and deploys it to the
-# existing ECS service with a CodeDeploy blue/green deployment. Runs on every push to main
-# (documentation-only changes are skipped) or by hand.
+# existing ECS service with a CodeDeploy blue/green deployment. Runs on a push to main that changes the
+# application or its deployment files (see `paths` below), or by hand.
 #
 #   1. test    - unit tests (the same tests as the pull request check)
 #   2. build   - docker build, push tagged with the git commit SHA, wait for the ECR scan, stop on CRITICAL findings
@@ -24,9 +24,12 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
+    # Only changes that alter what is deployed. Terraform, scripts and docs changes do not rebuild the image
+    # (infrastructure is applied by hand), and a manual run is always possible (workflow_dispatch).
+    paths:
+      - 'product-service/**'
+      - 'appspec.yaml'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 # One deployment at a time. A queued run waits instead of cancelling a deployment midway.
