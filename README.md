@@ -104,7 +104,7 @@ What is still open after the scans in [docs/vulnerability-scan-report.md](docs/v
 | Low | **No static code analysis** | Nothing checks the app code for injection-style flaws, and Trivy doesn't | Semgrep or CodeQL in CI |
 | Low | **Base image pinned by tag, not digest** | `node:26.13.0-alpine3.24` (build stage) and `alpine:3.24.3` (runtime stage) can in theory be republished, and the two versions are bumped separately | Pin the image digest and update it deliberately |
 | Low | **Deploy permissions have no permissions boundary** | The scoped IAM policy for the PowerUserAccess permission set is verified: `CreateRole`, `PutRolePolicy`, `AttachRolePolicy` and `PassRole` all worked during the apply. It is limited to `product-service-*` roles, but it doesn't force a permissions boundary on them | Add a permissions boundary condition, as in the other projects |
-| Low | **Local Terraform state** | `backend.tf` now points to S3 with locking, but the existing local state has not been migrated yet | Run the migration in [terraform/README.md](terraform/README.md#remote-state) |
+| Low | **Shared state bucket** | State is in S3 with versioning, encryption and native locking (migrated 2026-10-31), in a bucket shared with other projects under separate keys | A dedicated bucket and access policy per project, with MFA delete or Object Lock |
 
 ## Monitoring and scaling
 
@@ -184,6 +184,7 @@ docs/
 ├── ECR_Runbook.md                # create the ECR repository, authenticate Docker, build, tag and push the image
 ├── Architecture.md               # end-to-end architecture diagrams, every AWS service, least privilege and defense in depth
 ├── E2E_Test_Results.md           # results of the first full deployment and verification in AWS
+├── Deployment.md                 # deploy, verify and debug: commands for the pipeline and Terraform, rollback, troubleshooting table
 ├── CICD.md                       # GitHub Actions + CodeDeploy blue/green pipeline: flow, one-time setup, rollback, security design
 ├── Logging_Runbook.md            # turn on, verify, read and turn off ALB, CloudTrail, S3 access and RDS logs
 ├── images/                       # CloudWatch dashboard charts from the AWS test (8) and architecture diagram images (6)
@@ -195,7 +196,7 @@ scripts/
 ├── install-hooks.sh      # enables the pre-commit hook for a clone
 └── verify-deployment.sh  # read-only check of a deployed stack: 28 checks on endpoints, security groups, IAM, logs, scaling
 .github/workflows/        # validate.yml (pull requests, no AWS access) and deploy.yml (push to main: build, push, CodeDeploy blue/green)
-.github/dependabot.yml    # weekly updates for the pinned GitHub Actions
+.github/dependabot.yml    # weekly updates for GitHub Actions, npm packages, Docker base images and Terraform providers
 appspec.yaml              # CodeDeploy blue/green appspec (task definition placeholder filled in by deploy.yml)
 .githooks/pre-commit      # runs the secret scan before every commit
 .checkov.yaml             # reviewed Checkov exceptions, each with a reason
@@ -266,10 +267,10 @@ needed); the commands are in the [runbook](docs/runbook.md#2-load-the-database-s
 | **Schema migration is run by hand** | The one-off Fargate task in `terraform/migrate.tf` runs `node src/migrate.js` from the app image to load `db/schema.sql`. It worked in AWS (exit 0, `/products` returned the 3 products afterwards), and it is safe to run again. It is started manually with `aws ecs run-task`, and it needs an image that was built after `migrate.js` was added. | Run it from a pipeline after each deploy |
 | **HTTP only** | Traffic between the client and the ALB is unencrypted | An ACM certificate, an HTTPS listener and an HTTP redirect (needs a domain) |
 | **No authentication on the API** | Anyone who can reach the ALB can read the products | A Cognito or JWT authorizer, or restrict the ALB by CIDR |
-| **Pipeline: rollback untested** | GitHub Actions + CodeDeploy blue/green ([docs/CICD.md](docs/CICD.md)) deployed successfully once on 2026-11-01. Switching to blue/green replaced the ECS service (a short outage). The automatic rollback has not been tested | Deploy a deliberately failing image and confirm traffic stays on the old tasks |
+| **Pipeline: rollback untested** | GitHub Actions + CodeDeploy blue/green ([docs/CICD.md](docs/CICD.md)) deployed successfully four times on 2026-11-01 (the first deployment, then three more). Switching to blue/green replaced the ECS service (a short outage). The automatic rollback has not been tested | Deploy a deliberately failing image and confirm traffic stays on the old tasks |
 | **Secret scan is also a CI check** | The pre-commit hook can be skipped (`--no-verify`) or never enabled, so the pull request check re-runs the scan on every commit and all tracked files | Make the check required once branch protection is applied (docs/CICD.md) |
 | **No automated tests** | The service is verified by hand only | Unit tests for the routes with the pool mocked |
-| **Local Terraform state (migration pending)** | The S3 backend is configured (`terraform/backend.tf`), but the live stack's state is still the local file until `terraform init -migrate-state` is run | Run the migration in [terraform/README.md](terraform/README.md#remote-state) |
+| **State bucket is shared** | The S3 state bucket is versioned, encrypted and locked, but shared with the other portfolio projects; the bootstrap stack's state is still a local file | A dedicated bucket per project; move the bootstrap state too |
 | **Single NAT gateway and single-AZ database** | A zone failure affects outbound access or the database | One NAT per zone, `multi_az = true` |
 | **Deletion safeguards are off** | `deletion_protection = false`, `skip_final_snapshot = true` | Flip both for anything that holds real data |
 | **Auto Scaling: CPU-based scaling not tested** | Target tracking on CPU and requests per task is defined in `terraform/autoscaling.tf` (2 to 4 tasks). Verified in AWS: 5 minutes of traffic took the service from 2 to 4 healthy tasks, 2 per availability zone, and about 18 minutes after the load ended the service began scaling back in (4 to 3 tasks); see [docs/E2E_Test_Results.md](docs/E2E_Test_Results.md). Scaling on real CPU load was not tested, because `/health` is too light to raise CPU. Nothing notifies anyone of errors: there are no CloudWatch alarms of our own. Database connections peaked at 13 during the test, but the 4-task ceiling hasn't been tested near the `db.t4g.micro` limit. | Observe scale-in, and add alarms on 5xx responses and unhealthy targets |

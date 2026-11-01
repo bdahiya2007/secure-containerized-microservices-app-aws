@@ -116,7 +116,8 @@ flowchart LR
 
 | File | Contents |
 |---|---|
-| `versions.tf` | Terraform and AWS provider versions, default tags |
+| `versions.tf` | Terraform (>= 1.10) and AWS provider versions, default tags |
+| `backend.tf` | S3 remote state with native locking; the bucket name comes from `backend.hcl` (git-ignored, copy `backend.hcl.example`) |
 | `variables.tf` | Input variables |
 | `network.tf` | VPC, public/private subnets, IGW, NAT, route tables, security groups |
 | `rds.tf` | DB subnet group and PostgreSQL 18 instance (password managed by Secrets Manager) |
@@ -124,7 +125,9 @@ flowchart LR
 | `ecs.tf` | Log group, cluster, IAM roles, task definition, service, ALB, target group, listener |
 | `logging.tf` | Central private, encrypted S3 log bucket with per-prefix expiry, a bucket policy with one statement per writer, ALB logs (always on), and the optional CloudTrail trail and S3 access logging (switches) |
 | `monitoring.tf` | CloudWatch dashboard: ECS reserved and utilized CPU and memory, desired, running and pending task counts, ALB request count, 4XX and 5XX errors, response time and target health |
-| `autoscaling.tf` | Application Auto Scaling target (2 to 4 tasks) and two target-tracking policies: average CPU and ALB requests per task |
+| `autoscaling.tf` | Application Auto Scaling target (2 to 4 tasks) and two target-tracking policies: average CPU and ALB requests per task (a metric-math expression over both target groups when `enable_blue_green` is on) |
+| `codedeploy.tf` | Only with `enable_blue_green`: the green target group, the CodeDeploy-controlled ECS service, the CodeDeploy application, deployment group and service role |
+| `bootstrap/` | Separate stack, applied by hand with local state: the GitHub OIDC deploy role the pipeline assumes (see [docs/CICD.md](../docs/CICD.md)) |
 | `migrate.tf` | One-off Fargate task definition that runs `node src/migrate.js` from the app image to load `db/schema.sql` into the private database (run by hand with `aws ecs run-task`) |
 | `outputs.tf` | ALB DNS name, ECR URL, RDS endpoint, DB secret ARN |
 
@@ -248,7 +251,7 @@ push the image, then run the full apply; see [docs/ECR_Runbook.md](../docs/ECR_R
   - *Least-privilege egress:* the app security group allows only TCP 443 and PostgreSQL to the database group. The two rules are separate `aws_vpc_security_group_egress_rule` resources, because inline rules would create a dependency cycle with the database group.
   - *S3 gateway endpoint (free):* ECR layers are stored in S3, so image pulls bypass the NAT gateway.
   - *Confused-deputy protection:* both ECS roles' trust policies require `aws:SourceAccount` and `aws:SourceArn` for ECS in this account and region. This is the documented AWS pattern; if tasks ever fail to start with an "unable to assume role" error, check these conditions first.
-  - *Safe deployments:* the ECS service has a deployment circuit breaker with automatic rollback and a 60-second health-check grace period, and the target group drains connections after 30 seconds.
+  - *Safe deployments:* a 60-second health-check grace period and a 30-second connection drain. With rolling updates the ECS service has a deployment circuit breaker with automatic rollback; with `enable_blue_green` CodeDeploy shifts traffic gradually and rolls back automatically (the circuit breaker is not available with that controller).
 - **Security groups and ALB hardening:** every security group and rule has a description, the VPC's default security group is emptied, and the ALB drops invalid headers.
 - **Single NAT gateway and single-AZ RDS** keep the demo cheap. See "Production hardening".
 
@@ -262,7 +265,7 @@ traffic. Run `terraform destroy` when finished.
 - HTTPS listener with an ACM certificate, and redirect HTTP to HTTPS
 - One NAT gateway per AZ
 - `multi_az = true`, `deletion_protection = true`, `skip_final_snapshot = false` on RDS
-- Remote state (S3 backend with locking)
+- A dedicated state bucket per project (state is already in S3 with locking, in a shared bucket)
 - Pin `engine_version` to a specific minor version
 - CloudWatch alarms for 5xx responses and unhealthy targets (target tracking creates its own scaling alarms, but nothing notifies a person)
 - Immutable image tags (git SHA) instead of `latest`
@@ -283,7 +286,7 @@ State is stored in S3 (`backend.tf`) with native locking (`use_lockfile`, Terraf
 
 The bucket name is not hard-coded because it contains the AWS account ID. The state bucket must have versioning, encryption and all public access blocked. The sibling project's existing shared bucket meets this; otherwise create one first.
 
-Migrate the existing local state (once; asks before copying):
+**Status: migrated on 2026-10-31.** The live stack's 63 resources are in the remote state, `terraform plan` showed no changes afterwards, and locking was verified (the lock was acquired and released). The local `terraform.tfstate*` files are leftovers. To migrate another clone or stack, the steps were:
 
 ```bash
 cd terraform

@@ -68,6 +68,10 @@ Doing the full apply first works too, but the tasks fail to start until the imag
    name, leaving the registry host that `docker login` needs.
 
 3. **Force ECS to pick up the image and wait for it to settle**
+
+   > Only for a service with the default ECS controller (`enable_blue_green = false`). `--force-new-deployment` is
+   > rejected when CodeDeploy controls the service; there, tasks start on their own after the apply, and releases
+   > go through the pipeline (section 4).
    ```bash
    aws ecs update-service --region "$AWS_REGION" --no-cli-pager \
      --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment
@@ -166,6 +170,10 @@ aws elbv2 describe-target-health --region "$AWS_REGION" --no-cli-pager \
 
 ## 4. Deploy a new version
 
+**With the pipeline (`enable_blue_green = true`, the normal path):** merge the change to `main` (or run `gh workflow run deploy.yml`). GitHub Actions builds the image, pushes it tagged with the commit SHA, registers a new task definition revision and runs a CodeDeploy blue/green deployment. Terraform's `image_tag` is not used and is ignored by the service. Commands, verification and debugging: [Deployment.md](Deployment.md).
+
+**Without the pipeline (`enable_blue_green = false`, rolling updates):**
+
 1. Build and push with a unique tag (a git SHA works well):
    ```bash
    REPO=$(terraform -chdir=terraform output -raw ecr_repository_url)
@@ -188,7 +196,9 @@ ECS replaces tasks gradually, starting new ones before stopping old ones.
 
 ## 5. Roll back
 
-Re-apply with the previous tag:
+**With the pipeline:** a failed deployment rolls back by itself (traffic stays on the old tasks). To undo a release that went live, revert the commit through a pull request and let the pipeline redeploy, or stop a deployment in progress with `aws deploy stop-deployment --deployment-id <id> --auto-rollback-enabled`. See [Deployment.md](Deployment.md#5-roll-back).
+
+**Without the pipeline:** re-apply with the previous tag:
 ```bash
 terraform -chdir=terraform apply -var="image_tag=<previous-tag>"
 ```
@@ -380,9 +390,12 @@ so they pick up the new value:
 aws secretsmanager rotate-secret --region "$AWS_REGION" --no-cli-pager \
   --secret-id "$(terraform -chdir=terraform output -raw db_secret_arn)"
 
+# default ECS controller:
 aws ecs update-service --region "$AWS_REGION" --no-cli-pager \
   --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment
 ```
+With `enable_blue_green = true`, `--force-new-deployment` is rejected. Restart by running the Deploy workflow
+(`gh workflow run deploy.yml`), or stop the tasks one at a time (`aws ecs stop-task`) and let ECS replace them.
 
 ## 10. Tear down
 
