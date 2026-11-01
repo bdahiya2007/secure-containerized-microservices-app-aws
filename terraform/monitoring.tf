@@ -18,7 +18,13 @@ locals {
   dash_cluster = aws_ecs_cluster.main.name
   dash_service = local.service_name
   dash_lb      = aws_lb.app.arn_suffix
-  dash_tg      = aws_lb_target_group.app.arn_suffix
+
+  # With enable_blue_green, CodeDeploy alternates traffic between two target groups, so the per-target-group
+  # charts show both: whichever one is idle just reads zero.
+  dash_tgs = concat(
+    [{ suffix = aws_lb_target_group.app.arn_suffix, name = "blue" }],
+    [for g in aws_lb_target_group.green : { suffix = g.arn_suffix, name = "green" }],
+  )
 }
 
 resource "aws_cloudwatch_dashboard" "main" {
@@ -122,10 +128,11 @@ resource "aws_cloudwatch_dashboard" "main" {
           view    = "timeSeries"
           stacked = false
           period  = 60
-          metrics = [
+          metrics = concat([
             ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", local.dash_lb, { stat = "Sum", label = "Requests" }],
-            ["AWS/ApplicationELB", "RequestCountPerTarget", "TargetGroup", local.dash_tg, "LoadBalancer", local.dash_lb, { stat = "Sum", label = "Requests per task (scaling metric)" }],
-          ]
+            ], [for g in local.dash_tgs :
+            ["AWS/ApplicationELB", "RequestCountPerTarget", "TargetGroup", g.suffix, "LoadBalancer", local.dash_lb, { stat = "Sum", label = "Requests per task (${g.name} target group)" }]
+          ])
         }
       },
       {
@@ -161,8 +168,8 @@ resource "aws_cloudwatch_dashboard" "main" {
           stacked = false
           period  = 60
           metrics = [
-            ["AWS/ApplicationELB", "TargetResponseTime", "TargetGroup", local.dash_tg, "LoadBalancer", local.dash_lb, { stat = "Average", label = "Average" }],
-            ["AWS/ApplicationELB", "TargetResponseTime", "TargetGroup", local.dash_tg, "LoadBalancer", local.dash_lb, { stat = "p95", label = "p95" }],
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", local.dash_lb, { stat = "Average", label = "Average" }],
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", local.dash_lb, { stat = "p95", label = "p95" }],
           ]
         }
       },
@@ -178,10 +185,10 @@ resource "aws_cloudwatch_dashboard" "main" {
           view    = "timeSeries"
           stacked = false
           period  = 60
-          metrics = [
-            ["AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", local.dash_tg, "LoadBalancer", local.dash_lb, { stat = "Average", label = "Healthy" }],
-            ["AWS/ApplicationELB", "UnHealthyHostCount", "TargetGroup", local.dash_tg, "LoadBalancer", local.dash_lb, { stat = "Average", label = "Unhealthy" }],
-          ]
+          metrics = flatten([for g in local.dash_tgs : [
+            ["AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", g.suffix, "LoadBalancer", local.dash_lb, { stat = "Average", label = "Healthy (${g.name})" }],
+            ["AWS/ApplicationELB", "UnHealthyHostCount", "TargetGroup", g.suffix, "LoadBalancer", local.dash_lb, { stat = "Average", label = "Unhealthy (${g.name})" }],
+          ]])
         }
       },
     ]
