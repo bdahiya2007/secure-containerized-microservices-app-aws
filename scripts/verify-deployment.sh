@@ -39,8 +39,14 @@ VPC_ID=$(echo "$LB_JSON" | py 'import json,sys; print(json.load(sys.stdin)["VpcI
 # ---- check functions ----
 no_drift() { terraform -chdir=terraform plan -no-color -input=false 2>&1 | grep -q '^No changes'; }
 service_steady() {
+  # ECS-controlled service: the deployment's rollout state. CodeDeploy-controlled service (enable_blue_green):
+  # ECS reports no deployments, so use the primary task set's stability status instead.
   local d r s
   read -r d r s <<<"$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].[desiredCount,runningCount,deployments[0].rolloutState]' --output text)"
+  if [ "$s" = None ]; then
+    s=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query "services[0].taskSets[?status=='PRIMARY'].stabilityStatus | [0]" --output text)
+    [ "$s" = STEADY_STATE ] && s=COMPLETED
+  fi
   [ -n "$d" ] && [ "$d" = "$r" ] && [ "$s" = COMPLETED ]
 }
 targets_healthy_and_match() {
