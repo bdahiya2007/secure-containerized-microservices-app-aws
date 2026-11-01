@@ -108,7 +108,7 @@ sequenceDiagram
 ```
 
 Before the first request, ECS does the start-up work using the **execution role**, not the app: it pulls the image from ECR (through the NAT gateway, with the layers coming from S3 through the gateway endpoint),
-reads the database password from Secrets Manager, and starts the container with it as an environment variable. The running app then holds **no AWS permissions at all** (its task role is empty); it can only reach the database, using that password.
+and starts the container with the **name** of the database secret (not its value). The running app then reads the credentials from Secrets Manager itself, using its **task role**, which holds one permission: read that one secret. The password is never in the task definition or in an environment variable. See [Secrets.md](Secrets.md).
 
 ## 3. Build and deploy flow
 
@@ -157,8 +157,8 @@ Infrastructure changes (Terraform) are still reviewed and applied by hand; the p
 | **Amazon ECS on AWS Fargate** | Runs the containers with no servers to manage | Cluster with Container Insights; service of 2 to 4 tasks; 0.25 vCPU and 512 MB each; CodeDeploy blue/green with automatic rollback (the deployment circuit breaker when `enable_blue_green` is off); 60-second health-check grace period | `awsvpc` networking, no public IPs, non-root user, read-only root filesystem, no ECS Exec, task role with no permissions |
 | **Amazon ECR** | Stores the container image | Repository `product-service`, scan on push, AES-256 encryption, keeps the last 10 images | Private; pulled only by the execution role. Mutable tags are a gap. |
 | **Amazon RDS for PostgreSQL** | Stores the products | PostgreSQL 18.6 on `db.t4g.micro`, 20 GB gp3, single-AZ, 7-day backups, tags copied to snapshots | In private subnets, **not publicly accessible**, encrypted at rest, reachable only from the app security group, no outbound rules |
-| **AWS Secrets Manager** | Holds the database credentials | RDS creates and manages the master password (`manage_master_user_password`); ECS injects it as `DB_PASSWORD` | No password in code, in the image, in Terraform variables or in state; the execution role can read this one secret only |
-| **AWS IAM** | Decides who and what can do what | Execution role, task role (empty), scoped deploy policy, service-linked roles | See [section 6](#6-least-privilege-who-can-do-what) |
+| **AWS Secrets Manager** | Holds the database credentials | RDS creates and manages the master password (`manage_master_user_password`) and rotates it every 7 days; the app reads it at runtime ([Secrets.md](Secrets.md)) | No password in code, in the image, in the task definition, in Terraform variables or in state; the task role can read this one secret only (the execution role's temporary copy is removed in phase 2) |
+| **AWS IAM** | Decides who and what can do what | Execution role, task role (read one secret), scoped deploy policy, service-linked roles | See [section 6](#6-least-privilege-who-can-do-what) |
 | **AWS CodeDeploy** | Blue/green deployments of the ECS service | Application and deployment group (`terraform/codedeploy.tf`, behind `enable_blue_green`); two target groups; linear 10% per minute; automatic rollback; service role limited to this account | Started only by the pipeline role |
 | **GitHub Actions + IAM OIDC** | Builds and deploys the application | Role `product-service-deploy-role` trusts only this repository (immutable owner and repository ID) in the `dev` environment; permissions are limited to the ECR repository, task definitions, two `PassRole` targets and one deployment group; created by a separately applied bootstrap stack | No stored AWS keys; the role cannot change itself |
 | **Application Auto Scaling** | Adds and removes tasks with load | Two target-tracking policies: CPU 60 percent and 500 requests per task per minute; 2 to 4 tasks; scale out after 60 seconds, scale in after 300 | Capped at 4 so database connections stay bounded (10 per task) |
@@ -177,7 +177,7 @@ This project has run on Fargate since its first deployment; it never had an EC2 
 | **Task definition** | `requiresCompatibilities = ["EC2"]`; any network mode; CPU and memory can be set per container | `["FARGATE"]`; `awsvpc` is required; CPU and memory are set for the whole task from the allowed pairs (256 and 512 here); `runtimePlatform` must match the image (X86_64, so the image is built with `--platform linux/amd64`) | `terraform/ecs.tf` |
 | **Service** | `launch_type = "EC2"`, or a capacity provider backed by an Auto Scaling group | `launch_type = "FARGATE"`; no capacity providers | `ecs.tf`, `codedeploy.tf` |
 | **Networking** | Tasks share the instance's network (`bridge` or `host`) with dynamic host ports; security groups sit on the instances | `awsvpc`: every task has its own network interface and private IP, and its own security group; the target group uses `target_type = "ip"`; tasks run in private subnets with no public IP and reach ECR and Secrets Manager through the NAT gateway (image layers through the S3 gateway endpoint) | `terraform/network.tf`, `ecs.tf` |
-| **IAM** | An instance role and instance profile (`ecsInstanceRole`) so the ECS agent can register and pull; a task execution role if secrets or log drivers need it; a task role | No instance role at all (there are no instances). Only the **execution role** (ECR pull, logs, read one secret) and the **task role** (empty); both trust `ecs-tasks.amazonaws.com` with `aws:SourceAccount` and `aws:SourceArn` conditions | `ecs.tf` |
+| **IAM** | An instance role and instance profile (`ecsInstanceRole`) so the ECS agent can register and pull; a task execution role if secrets or log drivers need it; a task role | No instance role at all (there are no instances). Only the **execution role** (ECR pull, logs) and the **task role** (read the one database secret); both trust `ecs-tasks.amazonaws.com` with `aws:SourceAccount` and `aws:SourceArn` conditions | `ecs.tf` |
 | **Capacity and patching** | You run, scale and patch the instances (AMI, agent, Docker) and keep them in step with task demand | AWS runs the compute; only the service's task count is scaled (Application Auto Scaling, 2 to 4 tasks) | `terraform/autoscaling.tf` |
 | **Host access** | SSH to instances, host volumes, privileged containers possible | None: read-only root filesystem, non-root user, no ECS Exec, no host mounts | `ecs.tf`, `product-service/Dockerfile` |
 | **Cost** | Instance hours, whether or not tasks fill them | Per task, per second, for the vCPU and memory requested (about $0.012 an hour for one 0.25 vCPU and 512 MB task in us-east-1, before the NAT gateway, ALB and RDS) | [Cost](#12-cost) |
@@ -203,7 +203,7 @@ flowchart TB
       subgraph L3 ["3. Network segmentation"]
         s3["Private subnets, no public IPs, chained security groups,<br/>egress limited to 443 and 5432, database has no egress"]
         subgraph L4 ["4. Workload"]
-          s4["Non-root user, read-only filesystem, no npm, npx, corepack or yarn,<br/>empty task role, no ECS Exec, blue/green deploys with rollback"]
+          s4["Non-root user, read-only filesystem, no npm, npx, corepack or yarn,<br/>task role limited to one secret, no ECS Exec, blue/green deploys with rollback"]
           subgraph L5 ["5. Data"]
             s5["Encrypted RDS, TLS in transit, managed secret, backups,<br/>private encrypted log buckets"]
             data[("Product data")]
@@ -227,7 +227,7 @@ flowchart TB
 | **1. Identity and governance** | SSO sign-in; the engineer's IAM policy limited to `product-service-*` roles; trust policies requiring `aws:SourceAccount` and `aws:SourceArn`; a budget alert | Stolen long-lived keys, privilege escalation through role creation, the confused-deputy problem, runaway cost |
 | **2. Perimeter** | The ALB is the only internet-facing resource; `alb_ingress_cidr` limits who can reach it; invalid headers are dropped | Direct access to tasks or the database, malformed-request attacks. *Gap: HTTP only, no authentication, no WAF.* |
 | **3. Network segmentation** | Tasks and database in private subnets with no public IPs; security groups that only accept the previous tier; app egress only to 443 and the database; no database egress; S3 gateway endpoint | Lateral movement, data exfiltration over unexpected ports, inbound connections to private resources |
-| **4. Workload** | Non-root `node` user; read-only root filesystem; minimal image with no npm, npx, corepack or yarn; empty task role; no ECS Exec; health checks; CodeDeploy blue/green with automatic rollback (the ECS circuit breaker is used only when `enable_blue_green` is off) | A compromised container being able to write files, escalate, call AWS APIs, or stay broken after a bad release |
+| **4. Workload** | Non-root `node` user; read-only root filesystem; minimal image with no npm, npx, corepack or yarn; task role limited to the one database secret; no ECS Exec; health checks; CodeDeploy blue/green with automatic rollback (the ECS circuit breaker is used only when `enable_blue_green` is off) | A compromised container being able to write files, escalate, call AWS APIs, or stay broken after a bad release |
 | **5. Data** | RDS encrypted at rest and private; TLS to the database; password only in Secrets Manager; private encrypted S3 buckets with a TLS-only policy; 7-day backups | Reading data at rest or in transit, leaked credentials, public log buckets |
 | **Detection** | ALB access logs, CloudTrail with log file validation, RDS logs, S3 access logs, Container Insights, dashboard | Attacks and mistakes going unnoticed, and tampering with the audit trail |
 
@@ -247,10 +247,10 @@ flowchart LR
   eng -->|"PowerUserAccess plus scoped IAM policy"| dep["Create and manage AWS resources,<br/>IAM only for product-service-* roles"]
   ecsSvc -->|"assumes, with SourceAccount and SourceArn conditions"| exe["Execution role"]
   exe --> e1["Pull from ECR, write container logs"]
-  exe --> e2["Read ONE secret: the database password"]
+  exe --> e2["Read the database secret (temporary, removed in phase 2)"]
   ecsSvc -->|"hands the task role to the container"| trole["Task role"]
   app -->|"uses"| trole
-  trole --> nothing["No permissions at all"]
+  trole --> readsecret["Read ONE secret: the database credentials"]
   elb -->|"bucket policy"| w1["Write to alb/ in the central bucket only"]
   ctsvc -->|"bucket policy, this trail only"| w2["Write to cloudtrail/ in the central bucket only"]
   s3log -->|"bucket policy, this bucket and account only"| w3["Write to central-logs/ in the access-log bucket only"]
@@ -258,8 +258,8 @@ flowchart LR
 
 | Principal | Allowed | Specifically not allowed |
 |---|---|---|
-| **ECS execution role** (used by ECS to start a task) | The AWS-managed ECS execution policy (pull images, write logs) plus `secretsmanager:GetSecretValue` on the one database secret | Reading any other secret, any other AWS service, or acting as anyone else. Only ECS in this account can assume it (`aws:SourceAccount`, `aws:SourceArn`). |
-| **ECS task role** (the app's own identity) | **Nothing.** The app talks only to PostgreSQL with its password. | Every AWS API call. A compromised app cannot read S3, other secrets or the account. |
+| **ECS execution role** (used by ECS to start a task) | The AWS-managed ECS execution policy (pull images, write logs) plus (temporarily, until phase 2) `secretsmanager:GetSecretValue` on the one database secret | Reading any other secret, any other AWS service, or acting as anyone else. Only ECS in this account can assume it (`aws:SourceAccount`, `aws:SourceArn`). |
+| **ECS task role** (the app's own identity) | `secretsmanager:GetSecretValue` on the one database secret, so the app can read its credentials at runtime | Every other AWS API call. A compromised app cannot read S3, other secrets or the account. |
 | **Engineer (SSO)** | PowerUserAccess for everything except IAM, plus the scoped policy ([iam/product-service-iam-policy.json](iam/product-service-iam-policy.json)): create and manage roles named `product-service-*`, attach **only** the ECS execution policy, and pass those roles **only** to `ecs-tasks.amazonaws.com` | Creating other roles or users, attaching broad policies such as AdministratorAccess to the roles, or passing roles to other services |
 | **ALB (ELB service account)** | `s3:PutObject` under `alb/AWSLogs/<account>/` in the central bucket | Reading logs, writing elsewhere |
 | **CloudTrail** | `s3:GetBucketAcl` and `s3:PutObject` under `cloudtrail/AWSLogs/<account>/`, only for this trail's ARN and with bucket-owner ownership | Any other write |
@@ -287,7 +287,7 @@ Other network controls: tasks and the database have no public IPs; the private r
 | Data | At rest | In transit | Access |
 |---|---|---|---|
 | Product data (RDS) | Encrypted (AWS-managed key), 7-day backups | TLS from the app. The server certificate is **not verified** (gap) | Only the app security group, with the managed password |
-| Database password | In Secrets Manager, created and managed by RDS (RDS supports automatic rotation of this secret; rotation was not observed in the test) | Fetched by ECS over TLS and injected as an environment variable | The execution role, for that one secret; never in code, image, variables or state |
+| Database credentials | In Secrets Manager, created and managed by RDS, rotated automatically every 7 days (the secret's metadata shows a first rotation shortly after creation; how the app behaves across a rotation has not been tested against AWS) | Fetched by the app at runtime over TLS with its task role, and again after a rotation ([Secrets.md](Secrets.md)); until the rollout finishes the live service still gets the password injected by ECS | The task role, for that one secret (and, until phase 2, the execution role); never in code, image, task definition, variables or state |
 | Container image | ECR, AES-256 | Pulled over HTTPS | The execution role |
 | Log files (S3) | SSE-S3, public access blocked, expiring | TLS-only bucket policy | Narrow per-writer policy statements |
 | Client traffic | n/a | **HTTP only** (gap: needs a domain and an ACM certificate) | Limited by `alb_ingress_cidr` |
@@ -384,6 +384,7 @@ The overview is tall because it shows every connection, so open the image at ful
 |---|---|
 | [README](../README.md) | Overview, security design, gaps and how to try it |
 | [terraform/README.md](../terraform/README.md) | Every Terraform file, variable and output, and the network diagram |
+| [Secrets.md](Secrets.md) | The database credentials in Secrets Manager: how the app reads them, rotation, IAM, rollout and debugging |
 | [runbook.md](runbook.md) | Deploy, release, roll back, scale, troubleshoot, tear down |
 | [EC2_vs_Fargate.md](EC2_vs_Fargate.md) | EC2 and Fargate compared: differences, cost, trade-offs, when to use which, and why this project uses Fargate |
 | [ECR_Runbook.md](ECR_Runbook.md) | Create the repository, authenticate, build and push the image |

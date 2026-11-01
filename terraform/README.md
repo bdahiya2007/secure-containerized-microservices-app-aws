@@ -227,10 +227,10 @@ push the image, then run the full apply; see [docs/ECR_Runbook.md](../docs/ECR_R
 - **Network isolation:** security groups chain ALB → app (port 3000) → database (port 5432).
   The database is not publicly accessible.
 - **No secrets in code or state files:** RDS generates the master password
-  (`manage_master_user_password`) and ECS injects it as `DB_PASSWORD` at container start.
+  (`manage_master_user_password`); the app reads it itself at runtime with the task role (`DB_SECRET_ARN` names the secret; see [docs/Secrets.md](../docs/Secrets.md)).
 - **Availability zones:** the first two standard (non-opt-in) AZs in the region are used.
 - **CPU architecture:** the task definition sets `runtime_platform` to `X86_64`/`LINUX` explicitly. It must match the platform the image is built for (`docker build --platform linux/amd64`).
-- **IAM:** two roles. The execution role (pulls the image, writes logs, reads the one database secret) has the AWS-managed ECS execution policy plus an inline policy; the task role, which is the app's own identity, has no permissions.
+- **IAM:** two roles. The execution role (pulls the image, writes logs) has the AWS-managed ECS execution policy, plus a temporary inline policy to read the database secret that is removed once the rollout in [docs/Secrets.md](../docs/Secrets.md) is finished; the task role, which is the app's own identity, has one inline policy: read the one database secret.
 - **Schema migration:** a one-off task, not a service. It runs the application's own image with the command `node src/migrate.js`, which loads `db/schema.sql` through the `pg` driver using the same `DB_*`
   settings and secret as the app. The official `postgres` image was rejected because it carried 85 known vulnerabilities (see the scan report); reusing the app image adds no new image to pull or scan.
   The seed insert only runs when the table is empty, so the task is safe to run again.

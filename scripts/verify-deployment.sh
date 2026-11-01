@@ -84,7 +84,37 @@ db_sg_locked() { aws ec2 describe-security-groups --filters "Name=group-name,Val
 app_sg_egress() { [ "$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$PROJECT-app-*" --query 'SecurityGroups[0].IpPermissionsEgress[].FromPort' --output text | tr '\t' '\n' | sort | tr '\n' ' ')" = "443 5432 " ]; }
 default_sg_empty() { aws ec2 describe-security-groups --filters "Name=group-name,Values=default" "Name=vpc-id,Values=$VPC_ID" --query 'SecurityGroups[0].[length(IpPermissions),length(IpPermissionsEgress)]' --output text | grep -q '^0.0$'; }
 roles_conditions() { local r; for r in "$PROJECT-execution" "$PROJECT-task"; do aws iam get-role --role-name "$r" --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition' --output json | grep -q 'aws:SourceAccount' || return 1; done; }
-task_role_empty() { [ "$(aws iam list-attached-role-policies --role-name "$PROJECT-task" --query 'length(AttachedPolicies)' --output text)" = 0 ] && [ "$(aws iam list-role-policies --role-name "$PROJECT-task" --query 'length(PolicyNames)' --output text)" = 0 ]; }
+# The app reads the database secret itself (product-service/src/db-secret.js): the task role may do exactly that, on
+# exactly that secret, and nothing else.
+task_role_reads_only_db_secret() {
+  [ "$(aws iam list-attached-role-policies --role-name "$PROJECT-task" --query 'length(AttachedPolicies)' --output text)" = 0 ] || return 1
+  [ "$(aws iam list-role-policies --role-name "$PROJECT-task" --query 'length(PolicyNames)' --output text)" = 1 ] || return 1
+  local name secret_arn
+  name=$(aws iam list-role-policies --role-name "$PROJECT-task" --query 'PolicyNames[0]' --output text)
+  secret_arn=$(tf_out db_secret_arn)
+  [ -n "$secret_arn" ] || return 1
+  aws iam get-role-policy --role-name "$PROJECT-task" --policy-name "$name" --query PolicyDocument --output json \
+    | SECRET_ARN="$secret_arn" py 'import json,os,sys; d=json.load(sys.stdin); s=d["Statement"]; assert len(s)==1 and s[0]["Effect"]=="Allow" and s[0]["Action"]==["secretsmanager:GetSecretValue"] and s[0]["Resource"]==os.environ["SECRET_ARN"]'
+}
+# The task definition the service is running holds no credential: no "secrets" injection, no DB_USER or DB_PASSWORD variable,
+# and only the NAME (ARN) of the secret in DB_SECRET_ARN.
+running_task_definition() {
+  local td
+  td=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].deployments[0].taskDefinition' --output text)
+  if [ -z "$td" ] || [ "$td" = None ]; then
+    td=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query "services[0].taskSets[?status=='PRIMARY'].taskDefinition | [0]" --output text)
+  fi
+  echo "$td"
+}
+task_definition_has_no_credentials() {
+  local td; td=$(running_task_definition)
+  [ -n "$td" ] && [ "$td" != None ] || return 1
+  aws ecs describe-task-definition --task-definition "$td" --query 'taskDefinition.containerDefinitions[0].{env:environment[].name,secrets:secrets}' --output json \
+    | py 'import json,sys; d=json.load(sys.stdin); env=d["env"] or []; assert not d["secrets"] and "DB_SECRET_ARN" in env and "DB_PASSWORD" not in env and "DB_USER" not in env'
+}
+# Advice, not a failure: after the first deployment of the version that reads the secret itself, the execution role's own
+# permission to read it can be removed (docs/Secrets.md, phase 2).
+execution_role_secret_access() { [ "$(aws iam list-role-policies --role-name "$PROJECT-execution" --query 'length(PolicyNames)' --output text)" = 0 ]; }
 scaling_configured() {
   aws application-autoscaling describe-scalable-targets --service-namespace ecs --resource-ids "service/$CLUSTER/$SERVICE" --query 'ScalableTargets[0].[MinCapacity,MaxCapacity]' --output text | grep -qE '^[0-9]+[[:space:]]+[0-9]+$' \
     && [ "$(aws application-autoscaling describe-scaling-policies --service-namespace ecs --resource-id "service/$CLUSTER/$SERVICE" --query 'length(ScalingPolicies)' --output text)" -ge 1 ]
@@ -149,7 +179,9 @@ check "VPC default security group is empty" default_sg_empty
 
 echo "--- IAM least privilege"
 check "Both ECS roles have the confused-deputy conditions" roles_conditions
-check "Task role has NO permissions (no attached or inline policies)" task_role_empty
+check "Task role can only read the one database secret (GetSecretValue on that ARN, nothing else)" task_role_reads_only_db_secret
+check "The running task definition holds no credentials (no secrets block, no DB_USER or DB_PASSWORD, only DB_SECRET_ARN)" task_definition_has_no_credentials
+if execution_role_secret_access; then pass "Execution role has no permission to read the secret"; else warn "Execution role can still read the database secret (remove it after the first deployment that reads it at runtime: docs/Secrets.md, phase 2)"; fi
 
 echo "--- Fargate (no EC2)"
 check "Service and every running task use the FARGATE launch type" fargate_launch_type
