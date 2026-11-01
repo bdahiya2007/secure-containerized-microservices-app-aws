@@ -1,6 +1,6 @@
 # CI/CD: GitHub Actions and CodeDeploy blue/green
 
-A push to `main` builds the Docker image, pushes it to the existing ECR repository and deploys it to the existing ECS service with an AWS CodeDeploy blue/green deployment. Pull requests run checks only and never touch AWS.
+A push to `main` that changes the application or its deployment files (`product-service/**`, `appspec.yaml`, `deploy.yml`) builds the Docker image, pushes it to the existing ECR repository and deploys it to the existing ECS service with an AWS CodeDeploy blue/green deployment. Pull requests run checks only and never touch AWS.
 
 > **Status (2026-11-01): deployed and verified once.** The first real run (a push to `main`, commit `80fae1d`) built the image, pushed it tagged with the commit SHA, passed the ECR scan gate, registered a new task definition revision and ran a CodeDeploy blue/green deployment with the linear 10%-per-minute config. Traffic moved from the old to the new target group in about 10 minutes, the old tasks were stopped after the 5-minute wait, the deployment ended `Succeeded` (about 16 minutes in total), and `/health` and `/products` returned 200 throughout. Not tested yet: an automatic rollback (a deliberately bad image). Before that, validation covered `terraform fmt`/`validate` on both stacks, both `terraform plan` runs, `actionlint`, Checkov, Semgrep, Trivy and `npm audit`, with all six pull request checks passing in GitHub Actions.
 
