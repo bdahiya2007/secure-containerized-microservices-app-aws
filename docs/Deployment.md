@@ -93,14 +93,14 @@ terraform apply tfplan                          # applies exactly that plan
 
 ## 4. Verify
 
-### Automated: 33 read-only checks
+### Automated: 35 read-only checks
 
 ```bash
 ./scripts/verify-deployment.sh              # includes a terraform plan (drift check)
 ./scripts/verify-deployment.sh --skip-plan  # faster; skips the drift check
 ```
 
-It takes a couple of minutes. Expect `31 passed, 0 failed, 2 skipped` (the drift check and, while Spot is off, the Fargate Spot check) with `--skip-plan`. Run it when no deployment is in progress.
+It takes a couple of minutes. Expect `33 passed, 0 failed, 2 skipped` with `--skip-plan` (the skipped ones are the drift check and, while Spot is off, the Fargate Spot check). Run it when no deployment is in progress.
 
 ### By hand
 
@@ -182,6 +182,7 @@ Common causes: the app cannot reach the database (check `DB_*` settings and secu
 | `Backend initialization required` | Not initialised with the backend config | `terraform init -backend-config=backend.hcl` |
 | `update-service --force-new-deployment` fails | Not supported when CodeDeploy controls the service | To restart tasks, stop them (`aws ecs stop-task`, ECS replaces them) or run the Deploy workflow |
 | `curl` to the ALB hangs | Your public IP changed; the load balancer allows only `alb_ingress_cidr` | Update `alb_ingress_cidr` in `demo.auto.tfvars` and apply |
+| `/products` returns 500 with `password authentication failed`, or `/health` is 503 with `AccessDeniedException` for `GetSecretValue` | The database password was rotated (the app retries once with a fresh copy), or the task role cannot read the secret | See [Secrets.md](Secrets.md#debug); check `aws iam get-role-policy --role-name product-service-task --policy-name read-db-secret` |
 | Dashboard or scaling shows nothing for requests | Looking at the idle target group | Both groups are charted; see [CICD.md](CICD.md#two-target-groups-what-it-changes) |
 
 ### Useful logs and metrics

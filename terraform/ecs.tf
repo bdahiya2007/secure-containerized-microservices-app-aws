@@ -73,10 +73,19 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Allow ECS to inject the RDS-managed password into the container
-resource "aws_iam_role_policy" "read_db_secret" {
+# The execution role has no access to the database secret: the app reads it itself with the task role (below), and ECS no
+# longer injects it into the container (docs/Secrets.md).
+
+resource "aws_iam_role" "task" {
+  name               = "${var.project_name}-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+}
+
+# The app reads the database credentials from Secrets Manager itself, at runtime (product-service/src/db-secret.js),
+# so the task role holds the one permission needed to do that, on the one secret RDS manages for this database.
+resource "aws_iam_role_policy" "task_read_db_secret" {
   name = "read-db-secret"
-  role = aws_iam_role.execution.id
+  role = aws_iam_role.task.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -86,11 +95,6 @@ resource "aws_iam_role_policy" "read_db_secret" {
       Resource = aws_db_instance.main.master_user_secret[0].secret_arn
     }]
   })
-}
-
-resource "aws_iam_role" "task" {
-  name               = "${var.project_name}-task"
-  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
 }
 
 # ---- Task definition & service ----
@@ -121,14 +125,11 @@ resource "aws_ecs_task_definition" "app" {
       { name = "DB_HOST", value = aws_db_instance.main.address },
       { name = "DB_PORT", value = tostring(aws_db_instance.main.port) },
       { name = "DB_NAME", value = var.db_name },
-      { name = "DB_USER", value = var.db_username },
       { name = "DB_SSL", value = "true" },
+      # The name (ARN) of the secret, not its value. The app fetches the username and password with the task role.
+      { name = "DB_SECRET_ARN", value = aws_db_instance.main.master_user_secret[0].secret_arn },
+      { name = "AWS_REGION", value = var.aws_region },
     ]
-
-    secrets = [{
-      name      = "DB_PASSWORD"
-      valueFrom = "${aws_db_instance.main.master_user_secret[0].secret_arn}:password::"
-    }]
 
     logConfiguration = {
       logDriver = "awslogs"

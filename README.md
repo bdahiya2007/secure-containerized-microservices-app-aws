@@ -23,7 +23,7 @@ flowchart LR
   AS["Application Auto Scaling<br/>target tracking: CPU 60%,<br/>500 requests per task per minute"] -.->|"sets the task count"| T
   ALB -.->|"RequestCountPerTarget<br/>and task CPU metrics"| AS
   T -->|":5432, TLS"| DB[("Amazon RDS PostgreSQL 18<br/>private subnets, encrypted")]
-  SM["Secrets Manager<br/>RDS-managed password"] -.->|"injected as DB_PASSWORD"| T
+  SM["Secrets Manager<br/>RDS-managed secret"] -.->|"read at runtime<br/>by the task role"| T
   T -.->|"via NAT gateway"| ECR["ECR<br/>image pull"]
   T -.-> CW["CloudWatch Logs"]
 ```
@@ -40,7 +40,7 @@ flowchart LR
 
 ## What this demonstrates
 
-- **Containerization done properly:** a multi-stage Dockerfile that installs production dependencies only, runs as the unprivileged `node` user on plain Alpine with only the `node` binary copied in (no npm, 220 MB),
+- **Containerization done properly:** a multi-stage Dockerfile that installs production dependencies only, runs as the unprivileged `node` user on plain Alpine with only the `node` binary copied in (no npm, 239 MB with the AWS SDK for reading the database secret),
   has a `HEALTHCHECK`, and starts `node` directly so `SIGTERM` reaches the app for a graceful shutdown.
 - **Infrastructure as code:** the whole stack (network, database, registry, cluster, load balancer, IAM) in Terraform.
 - **Security by default:** a private database, chained security groups, an encrypted database, a read-only container filesystem, and a password RDS generates and rotates in Secrets Manager.
@@ -54,11 +54,11 @@ flowchart LR
 | **Network exposure** | Only the ALB is public. Tasks and the database are in private subnets with no public IPs, and the database has `publicly_accessible = false`. |
 | **Security groups** | Internet → ALB (80) → app (3000) → database (5432). The database group admits only the app group, and the ALB can only send to port 3000 inside the VPC. The app group's outbound rules allow only TCP 443 (AWS services) and PostgreSQL to the database group. The ALB's source range is a **required** variable (`alb_ingress_cidr`, no default), and `0.0.0.0/0` is refused unless `allow_public_alb = true`, so an open load balancer is always a deliberate choice. (A plan once silently fell back to an open default during the AWS test; see [docs/E2E_Test_Results.md](docs/E2E_Test_Results.md#incident-the-alb-was-briefly-open-to-the-internet).) |
 | **IAM trust and deployments** | Both ECS roles can only be assumed by ECS acting for tasks in this account (`aws:SourceAccount` and `aws:SourceArn` conditions). The ECS service has a deployment circuit breaker with automatic rollback. An S3 gateway endpoint keeps image-layer pulls off the NAT gateway. |
-| **Database credentials** | `manage_master_user_password = true`: RDS generates the password and stores it in Secrets Manager. The password is never in code, variables, the image or the Terraform state. ECS injects it as `DB_PASSWORD` at start. |
+| **Database credentials** | `manage_master_user_password = true`: RDS generates the password and stores it in Secrets Manager. The credentials are never in code, variables, the image, the task definition or the Terraform state. The app reads the secret itself at runtime with its task role, and fetches it again after a rotation (see [docs/Secrets.md](docs/Secrets.md)). |
 | **Encryption** | RDS storage is encrypted. The app connects to RDS over TLS (`DB_SSL` defaults to on). ECR is encrypted at rest. |
 | **Image** | Plain Alpine 3.24.3 plus only the `node` binary (no npm, npx, corepack or yarn), production dependencies only, runs as the non-root `node` user, `.dockerignore` keeps `.env`, `.git` and `node_modules` out, ECR scans each image on push. |
 | **Container hardening** | The task definition sets `readonlyRootFilesystem = true`. |
-| **Least-privilege IAM** | The execution role has the AWS-managed ECS execution policy plus `secretsmanager:GetSecretValue` on the one database secret. The task role has no permissions. |
+| **Least-privilege IAM** | The execution role has only the AWS-managed ECS execution policy (no access to the database secret). The task role has one permission: `secretsmanager:GetSecretValue` on the one database secret. |
 | **Query handling** | The only query is a fixed `SELECT` with no user input, so there is nothing to inject into. |
 | **Leak prevention** | Every change is scanned for secrets, credentials, confidential data, PII and AWS account or resource IDs before it is committed. `.gitignore` excludes `.env` files, keys, Terraform state, `*.tfvars` and saved plans. A pre-commit hook runs `scripts/secret-scan.py` on every commit (enable it once per clone with `./scripts/install-hooks.sh`), and the same scan runs as a required check on every pull request before merge. See [SECURITY.md](SECURITY.md). |
 | **Error hygiene** | Errors return generic messages, and the database error is logged server-side, never returned to the client. |
@@ -71,7 +71,7 @@ The image, Dockerfile and Terraform were scanned with Trivy, Checkov and `npm au
 | Area | Before | After | What changed |
 |---|---|---|---|
 | Image vulnerabilities | 17 (6 HIGH, 10 MEDIUM, 1 LOW), all in npm's bundled packages | **0** | The runtime stage is plain Alpine with only the `node` binary, so npm and its bundled packages are never in the image |
-| Image size on disk | 258 MB | **220 MB** | Minimal runtime stage. The `node` binary alone is about 146 MB, so there is little more to cut. |
+| Image size on disk | 258 MB | **220 MB**, then **239 MB** | Minimal runtime stage. The `node` binary alone is about 146 MB, so there is little more to cut. The 19 MB increase (2026-11-01) is the AWS SDK package the app uses to read its database secret at runtime ([docs/Secrets.md](docs/Secrets.md)). |
 | Image secrets | 0 | 0 | Secrets-only scan over all layers |
 | Application dependencies | 0 | 0 | `npm audit` and Trivy |
 | Dockerfile misconfigurations | not scanned | 0 failed (27 passed) | |
@@ -164,10 +164,11 @@ product-service/
 └── src/
     ├── server.js         # listens on :3000, graceful shutdown on SIGTERM
     ├── app.js            # GET /products, GET /health
-    ├── db.js             # PostgreSQL pool, configured from environment variables
+    ├── db-secret.js      # reads the database credentials from Secrets Manager at runtime (DB_SECRET_ARN), refreshes them after a rotation
+    ├── db.js             # PostgreSQL pool: username from the secret, password function, one retry after a rotation
     ├── logger.js         # structured JSON logging (levels, no dependency)
     └── migrate.js        # one-off schema loader, run by the ECS migration task
-test/app.test.js          # 8 automated tests (npm test, Node's built-in runner): routing, request IDs, log fields, no secrets; not part of the image
+test/                     # 25 automated tests (npm test, Node's built-in runner): routing, request IDs, log fields, no secrets (app.test.js); credential loading and rotation (db-secret.test.js, db.test.js); not part of the image
 terraform/
 ├── network.tf            # VPC, subnets, NAT, route tables, security groups
 ├── rds.tf                # PostgreSQL 18, encrypted, private, managed password
@@ -187,6 +188,7 @@ docs/
 ├── Architecture.md               # end-to-end architecture diagrams, every AWS service, least privilege and defense in depth
 ├── E2E_Test_Results.md           # results of the first full deployment and verification in AWS
 ├── Deployment.md                 # deploy, verify and debug: commands for the pipeline and Terraform, rollback, troubleshooting table
+├── Secrets.md                    # database credentials in Secrets Manager: how the app reads them, rotation, IAM, rollout, debugging
 ├── CICD.md                       # GitHub Actions + CodeDeploy blue/green pipeline: flow, one-time setup, rollback, security design
 ├── Logging_Runbook.md            # turn on, verify, read and turn off ALB, CloudTrail, S3 access and RDS logs
 ├── images/                       # CloudWatch dashboard charts from the AWS test (8) and architecture diagram images (6)
@@ -197,7 +199,7 @@ scripts/
 ├── check-appspec.py      # offline check that appspec.yaml matches Terraform and every action is SHA-pinned
 ├── secret-scan.py        # secret and sensitive-data scanner (pre-commit hook)
 ├── install-hooks.sh      # enables the pre-commit hook for a clone
-└── verify-deployment.sh  # read-only check of a deployed stack: 33 checks on endpoints, security groups, IAM, logs, scaling
+└── verify-deployment.sh  # read-only check of a deployed stack: 35 checks on endpoints, security groups, IAM, logs, scaling
 .github/workflows/        # validate.yml (pull requests, no AWS access) and deploy.yml (push to main: build, push, CodeDeploy blue/green)
 .github/dependabot.yml    # weekly updates for GitHub Actions, npm packages, Docker base images and Terraform providers
 appspec.yaml              # CodeDeploy blue/green appspec (task definition placeholder filled in by deploy.yml)
@@ -270,7 +272,8 @@ needed); the commands are in the [runbook](docs/runbook.md#2-load-the-database-s
 | **Schema migration is run by hand** | The one-off Fargate task in `terraform/migrate.tf` runs `node src/migrate.js` from the app image to load `db/schema.sql`. It worked in AWS (exit 0, `/products` returned the 3 products afterwards), and it is safe to run again. It is started manually with `aws ecs run-task`, and it needs an image that was built after `migrate.js` was added. | Run it from a pipeline after each deploy |
 | **HTTP only** | Traffic between the client and the ALB is unencrypted | An ACM certificate, an HTTPS listener and an HTTP redirect (needs a domain) |
 | **No authentication on the API** | Anyone who can reach the ALB can read the products | A Cognito or JWT authorizer, or restrict the ALB by CIDR |
-| **Pipeline: rollback untested** | GitHub Actions + CodeDeploy blue/green ([docs/CICD.md](docs/CICD.md)) deployed successfully four times on 2026-11-01 (the first deployment, then three more). Switching to blue/green replaced the ECS service (a short outage). The automatic rollback has not been tested | Deploy a deliberately failing image and confirm traffic stays on the old tasks |
+| **Pipeline: rollback untested** | GitHub Actions + CodeDeploy blue/green ([docs/CICD.md](docs/CICD.md)) deployed successfully six times on 2026-11-01 (the first deployment, then five more, including the runtime-secret rollout). Switching to blue/green replaced the ECS service (a short outage). The automatic rollback has not been tested | Deploy a deliberately failing image and confirm traffic stays on the old tasks |
+| **Rotation tested on a small scale** | A forced password rotation was tested live on 2026-11-01 ([docs/Secrets.md](docs/Secrets.md#live-rotation-test)): after a retry race was fixed, 100 of 100 parallel and 39 of 39 steady requests returned 200. Not tested: sustained heavy load, or a rotation during a deployment | A load test across a rotation |
 | **Secret scan is also a CI check** | The pre-commit hook can be skipped (`--no-verify`) or never enabled, so the pull request check re-runs the scan on every commit and all tracked files | Make the check required once branch protection is applied (docs/CICD.md) |
 | **No automated tests** | The service is verified by hand only | Unit tests for the routes with the pool mocked |
 | **State bucket is shared** | The S3 state bucket is versioned, encrypted and locked, but shared with the other portfolio projects; the bootstrap stack's state is still a local file | A dedicated bucket per project; move the bootstrap state too |

@@ -29,14 +29,11 @@ resource "aws_ecs_task_definition" "migrate" {
       { name = "DB_HOST", value = aws_db_instance.main.address },
       { name = "DB_PORT", value = tostring(aws_db_instance.main.port) },
       { name = "DB_NAME", value = var.db_name },
-      { name = "DB_USER", value = var.db_username },
       { name = "DB_SSL", value = "true" },
+      # The name (ARN) of the secret, not its value. The app fetches the username and password with the task role.
+      { name = "DB_SECRET_ARN", value = aws_db_instance.main.master_user_secret[0].secret_arn },
+      { name = "AWS_REGION", value = var.aws_region },
     ]
-
-    secrets = [{
-      name      = "DB_PASSWORD"
-      valueFrom = "${aws_db_instance.main.master_user_secret[0].secret_arn}:password::"
-    }]
 
     logConfiguration = {
       logDriver = "awslogs"
