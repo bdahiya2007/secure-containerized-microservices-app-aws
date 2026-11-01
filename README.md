@@ -182,6 +182,7 @@ terraform/
 docs/
 ├── runbook.md                    # deploy, verify, release, roll back, troubleshoot, tear down
 ├── ECR_Runbook.md                # create the ECR repository, authenticate Docker, build, tag and push the image
+├── EC2_vs_Fargate.md             # EC2 vs Fargate: differences, cost, trade-offs, when to use which, why Fargate here
 ├── Architecture.md               # end-to-end architecture diagrams, every AWS service, least privilege and defense in depth
 ├── E2E_Test_Results.md           # results of the first full deployment and verification in AWS
 ├── Deployment.md                 # deploy, verify and debug: commands for the pipeline and Terraform, rollback, troubleshooting table

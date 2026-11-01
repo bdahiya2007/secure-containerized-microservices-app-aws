@@ -170,7 +170,7 @@ Infrastructure changes (Terraform) are still reviewed and applied by hand; the p
 
 ### Fargate instead of EC2: what differs
 
-This project has run on Fargate since its first deployment; it never had an EC2 launch type, so there was nothing to migrate. This section records what moving an ECS service from the EC2 launch type to Fargate involves and where each piece lives here, so the choice is explicit and checkable. The application is unchanged by it: the same image, port 3000, `/health`, ALB, database and secrets.
+This project has run on Fargate since its first deployment; it never had an EC2 launch type, so there was nothing to migrate. This section records what moving an ECS service from the EC2 launch type to Fargate involves and where each piece lives here, so the choice is explicit and checkable. For the broader comparison, the trade-offs and when to pick each, see [EC2_vs_Fargate.md](EC2_vs_Fargate.md). The application is unchanged by it: the same image, port 3000, `/health`, ALB, database and secrets.
 
 | Concern | With the EC2 launch type | Fargate, as built here | Where |
 |---|---|---|---|
@@ -385,6 +385,7 @@ The overview is tall because it shows every connection, so open the image at ful
 | [README](../README.md) | Overview, security design, gaps and how to try it |
 | [terraform/README.md](../terraform/README.md) | Every Terraform file, variable and output, and the network diagram |
 | [runbook.md](runbook.md) | Deploy, release, roll back, scale, troubleshoot, tear down |
+| [EC2_vs_Fargate.md](EC2_vs_Fargate.md) | EC2 and Fargate compared: differences, cost, trade-offs, when to use which, and why this project uses Fargate |
 | [ECR_Runbook.md](ECR_Runbook.md) | Create the repository, authenticate, build and push the image |
 | [Logging_Runbook.md](Logging_Runbook.md) | Turn on, verify and read each log |
 | [vulnerability-scan-report.md](vulnerability-scan-report.md) | Scans, findings, fixes and accepted exceptions |
