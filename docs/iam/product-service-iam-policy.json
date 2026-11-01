@@ -21,7 +21,7 @@
       "Resource": "arn:aws:iam::ACCOUNT_ID:role/product-service-*"
     },
     {
-      "Sid": "AttachOnlyTheEcsExecutionPolicy",
+      "Sid": "AttachOnlyTheTwoManagedPolicies",
       "Effect": "Allow",
       "Action": [
         "iam:AttachRolePolicy",
@@ -30,18 +30,24 @@
       "Resource": "arn:aws:iam::ACCOUNT_ID:role/product-service-*",
       "Condition": {
         "ArnEquals": {
-          "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+          "iam:PolicyARN": [
+            "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+            "arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS"
+          ]
         }
       }
     },
     {
-      "Sid": "PassProductServiceRolesToEcsTasksOnly",
+      "Sid": "PassProductServiceRolesToEcsTasksAndCodeDeployOnly",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::ACCOUNT_ID:role/product-service-*",
       "Condition": {
         "StringEquals": {
-          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+          "iam:PassedToService": [
+            "ecs-tasks.amazonaws.com",
+            "codedeploy.amazonaws.com"
+          ]
         }
       }
     }
