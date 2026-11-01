@@ -177,6 +177,14 @@ Trivy skips vulnerabilities that have no fixed version yet (`--ignore-unfixed`),
 - **One environment** (`dev`). A `prod` environment with a required reviewer needs the repository to be public or a paid plan.
 - **The ALB is restricted to one IP,** so the pipeline cannot run an end-to-end smoke test from the runner. CodeDeploy's health checks are the gate.
 
+## Two target groups: what it changes
+
+With `enable_blue_green`, CodeDeploy alternates live traffic between `product-service-tg` (blue) and `product-service-tg-green`, so anything that watches one target group sees nothing while the other is live. Found after the first deployment and handled:
+
+- **Request-based scaling:** the built-in `ALBRequestCountPerTarget` metric names one target group. In blue/green mode the policy uses a metric-math expression instead: `(FILL(blue requests, 0) + FILL(green requests, 0)) / running tasks`, with the running-task count from Container Insights. The target value is the same `autoscaling_requests_per_target`. The CPU policy was never affected.
+- **Dashboard:** the request-per-task and healthy-host charts show both target groups (the idle one reads zero), and response time uses the load-balancer-level metric.
+- **`verify-deployment.sh`:** asks the listener which target group has the traffic.
+
 ## What the first runs found
 
 Running against AWS exposed four problems that offline checks could not. All are fixed.

@@ -48,9 +48,109 @@ resource "aws_appautoscaling_policy" "requests" {
     scale_out_cooldown = 60
     scale_in_cooldown  = 300
 
-    predefined_metric_specification {
-      predefined_metric_type = "ALBRequestCountPerTarget"
-      resource_label         = "${aws_lb.app.arn_suffix}/${aws_lb_target_group.app.arn_suffix}"
+    # Rolling updates: one target group, so the built-in metric works.
+    dynamic "predefined_metric_specification" {
+      for_each = var.enable_blue_green ? [] : [1]
+
+      content {
+        predefined_metric_type = "ALBRequestCountPerTarget"
+        resource_label         = "${aws_lb.app.arn_suffix}/${aws_lb_target_group.app.arn_suffix}"
+      }
+    }
+
+    # Blue/green: CodeDeploy alternates traffic between two target groups, and the built-in metric watches only one
+    # of them (it reads zero while the other is live, so the policy would stop scaling). Add the requests of both
+    # groups and divide by the running tasks, which is what ALBRequestCountPerTarget measures. The idle group has
+    # no data, so FILL turns the gap into 0. Running tasks come from Container Insights (enabled on the cluster).
+    dynamic "customized_metric_specification" {
+      for_each = var.enable_blue_green ? [1] : []
+
+      content {
+        metrics {
+          id    = "requests_blue"
+          label = "Requests, blue target group"
+
+          metric_stat {
+            stat = "Sum"
+
+            metric {
+              namespace   = "AWS/ApplicationELB"
+              metric_name = "RequestCount"
+
+              dimensions {
+                name  = "LoadBalancer"
+                value = aws_lb.app.arn_suffix
+              }
+
+              dimensions {
+                name  = "TargetGroup"
+                value = aws_lb_target_group.app.arn_suffix
+              }
+            }
+          }
+
+          return_data = false
+        }
+
+        metrics {
+          id    = "requests_green"
+          label = "Requests, green target group"
+
+          metric_stat {
+            stat = "Sum"
+
+            metric {
+              namespace   = "AWS/ApplicationELB"
+              metric_name = "RequestCount"
+
+              dimensions {
+                name  = "LoadBalancer"
+                value = aws_lb.app.arn_suffix
+              }
+
+              dimensions {
+                name  = "TargetGroup"
+                value = one(aws_lb_target_group.green[*].arn_suffix)
+              }
+            }
+          }
+
+          return_data = false
+        }
+
+        metrics {
+          id    = "tasks"
+          label = "Running tasks"
+
+          metric_stat {
+            stat = "Average"
+
+            metric {
+              namespace   = "ECS/ContainerInsights"
+              metric_name = "RunningTaskCount"
+
+              dimensions {
+                name  = "ClusterName"
+                value = aws_ecs_cluster.main.name
+              }
+
+              dimensions {
+                name  = "ServiceName"
+                value = local.service_name
+              }
+            }
+          }
+
+          return_data = false
+        }
+
+        metrics {
+          id          = "requests_per_task"
+          label       = "Requests per task (both target groups)"
+          expression  = "(FILL(requests_blue, 0) + FILL(requests_green, 0)) / tasks"
+          return_data = true
+        }
+      }
     }
   }
 }
