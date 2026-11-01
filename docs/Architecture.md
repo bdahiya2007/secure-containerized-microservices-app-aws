@@ -138,7 +138,7 @@ Infrastructure changes (Terraform) are still reviewed and applied by hand; the p
 | Stage | What it does | Security value |
 |---|---|---|
 | Secret scan and `.gitignore` | Blocks credentials, account IDs, personal data, state and key files from being committed | Keeps secrets out of the repository |
-| Multi-stage build | Installs dependencies in a build stage and copies only the `node` binary, the modules and the app into plain Alpine; npm, npx, corepack and yarn never reach the final image | Smaller attack surface (220 MB, 0 known vulnerabilities) |
+| Multi-stage build | Installs dependencies in a build stage and copies only the `node` binary, the modules and the app into plain Alpine; npm, npx, corepack and yarn never reach the final image | Smaller attack surface (239 MB including the AWS SDK; no HIGH or CRITICAL vulnerabilities in the Trivy scan on 2026-11-01) |
 | Pull request checks | Secret scan, Semgrep (code), `npm audit` and Trivy (libraries, image, Dockerfile), Checkov (Terraform), unit tests; none has AWS access | Findings fixed or recorded as reviewed exceptions: see [vulnerability-scan-report.md](vulnerability-scan-report.md) |
 | GitHub Actions deploy | Authenticates through GitHub OIDC to a role limited to one ECR repository, task definitions and one CodeDeploy deployment group | No stored AWS keys; only reviewed code on `main` can assume the role |
 | ECR push and scan | Image tagged with the commit SHA; ECR scans it and the job stops on a CRITICAL finding | Each running image maps to one commit |
@@ -157,7 +157,7 @@ Infrastructure changes (Terraform) are still reviewed and applied by hand; the p
 | **Amazon ECS on AWS Fargate** | Runs the containers with no servers to manage | Cluster with Container Insights; service of 2 to 4 tasks; 0.25 vCPU and 512 MB each; CodeDeploy blue/green with automatic rollback (the deployment circuit breaker when `enable_blue_green` is off); 60-second health-check grace period | `awsvpc` networking, no public IPs, non-root user, read-only root filesystem, no ECS Exec, task role with no permissions |
 | **Amazon ECR** | Stores the container image | Repository `product-service`, scan on push, AES-256 encryption, keeps the last 10 images | Private; pulled only by the execution role. Mutable tags are a gap. |
 | **Amazon RDS for PostgreSQL** | Stores the products | PostgreSQL 18.6 on `db.t4g.micro`, 20 GB gp3, single-AZ, 7-day backups, tags copied to snapshots | In private subnets, **not publicly accessible**, encrypted at rest, reachable only from the app security group, no outbound rules |
-| **AWS Secrets Manager** | Holds the database credentials | RDS creates and manages the master password (`manage_master_user_password`) and rotates it every 7 days; the app reads it at runtime ([Secrets.md](Secrets.md)) | No password in code, in the image, in the task definition, in Terraform variables or in state; the task role can read this one secret only (the execution role's temporary copy is removed in phase 2) |
+| **AWS Secrets Manager** | Holds the database credentials | RDS creates and manages the master password (`manage_master_user_password`) and rotates it every 7 days; the app reads it at runtime ([Secrets.md](Secrets.md)) | No password in code, in the image, in the task definition, in Terraform variables or in state; only the task role can read this one secret |
 | **AWS IAM** | Decides who and what can do what | Execution role, task role (read one secret), scoped deploy policy, service-linked roles | See [section 6](#6-least-privilege-who-can-do-what) |
 | **AWS CodeDeploy** | Blue/green deployments of the ECS service | Application and deployment group (`terraform/codedeploy.tf`, behind `enable_blue_green`); two target groups; linear 10% per minute; automatic rollback; service role limited to this account | Started only by the pipeline role |
 | **GitHub Actions + IAM OIDC** | Builds and deploys the application | Role `product-service-deploy-role` trusts only this repository (immutable owner and repository ID) in the `dev` environment; permissions are limited to the ECR repository, task definitions, two `PassRole` targets and one deployment group; created by a separately applied bootstrap stack | No stored AWS keys; the role cannot change itself |
@@ -193,7 +193,7 @@ An attacker, or an honest mistake, has to get past several independent layers. N
 ```mermaid
 flowchart TB
   subgraph L0 ["Before anything runs: supply chain and code"]
-    s0["Pre-commit secret scan, .gitignore, pinned base images, image and Terraform scans,<br/>minimal image with 0 known vulnerabilities, saved reviewed plans"]
+    s0["Pre-commit secret scan, .gitignore, pinned base images, image and Terraform scans,<br/>minimal image with no HIGH or CRITICAL vulnerabilities, saved reviewed plans"]
   end
 
   subgraph L1 ["1. Identity and governance"]
@@ -247,7 +247,6 @@ flowchart LR
   eng -->|"PowerUserAccess plus scoped IAM policy"| dep["Create and manage AWS resources,<br/>IAM only for product-service-* roles"]
   ecsSvc -->|"assumes, with SourceAccount and SourceArn conditions"| exe["Execution role"]
   exe --> e1["Pull from ECR, write container logs"]
-  exe --> e2["Read the database secret (temporary, removed in phase 2)"]
   ecsSvc -->|"hands the task role to the container"| trole["Task role"]
   app -->|"uses"| trole
   trole --> readsecret["Read ONE secret: the database credentials"]
@@ -258,7 +257,7 @@ flowchart LR
 
 | Principal | Allowed | Specifically not allowed |
 |---|---|---|
-| **ECS execution role** (used by ECS to start a task) | The AWS-managed ECS execution policy (pull images, write logs) plus (temporarily, until phase 2) `secretsmanager:GetSecretValue` on the one database secret | Reading any other secret, any other AWS service, or acting as anyone else. Only ECS in this account can assume it (`aws:SourceAccount`, `aws:SourceArn`). |
+| **ECS execution role** (used by ECS to start a task) | The AWS-managed ECS execution policy (pull images, write logs) and nothing else | Reading any secret (the database secret is read by the task role, not by this role), any other AWS service, any other AWS service, or acting as anyone else. Only ECS in this account can assume it (`aws:SourceAccount`, `aws:SourceArn`). |
 | **ECS task role** (the app's own identity) | `secretsmanager:GetSecretValue` on the one database secret, so the app can read its credentials at runtime | Every other AWS API call. A compromised app cannot read S3, other secrets or the account. |
 | **Engineer (SSO)** | PowerUserAccess for everything except IAM, plus the scoped policy ([iam/product-service-iam-policy.json](iam/product-service-iam-policy.json)): create and manage roles named `product-service-*`, attach **only** the ECS execution policy, and pass those roles **only** to `ecs-tasks.amazonaws.com` | Creating other roles or users, attaching broad policies such as AdministratorAccess to the roles, or passing roles to other services |
 | **ALB (ELB service account)** | `s3:PutObject` under `alb/AWSLogs/<account>/` in the central bucket | Reading logs, writing elsewhere |
@@ -287,7 +286,7 @@ Other network controls: tasks and the database have no public IPs; the private r
 | Data | At rest | In transit | Access |
 |---|---|---|---|
 | Product data (RDS) | Encrypted (AWS-managed key), 7-day backups | TLS from the app. The server certificate is **not verified** (gap) | Only the app security group, with the managed password |
-| Database credentials | In Secrets Manager, created and managed by RDS, rotated automatically every 7 days (the secret's metadata shows a first rotation shortly after creation; a forced rotation was tested live and found a retry race, since fixed; see [Secrets.md](Secrets.md#live-rotation-test)) | Fetched by the app at runtime over TLS with its task role, and again after a rotation ([Secrets.md](Secrets.md)); until the rollout finishes the live service still gets the password injected by ECS | The task role, for that one secret (and, until phase 2, the execution role); never in code, image, task definition, variables or state |
+| Database credentials | In Secrets Manager, created and managed by RDS, rotated automatically every 7 days (the secret's metadata shows a first rotation shortly after creation; a forced rotation was tested live and found a retry race, since fixed; see [Secrets.md](Secrets.md#live-rotation-test)) | Fetched by the app at runtime over TLS with its task role, and again after a rotation ([Secrets.md](Secrets.md)) | The task role, for that one secret; never in code, image, task definition, variables or state |
 | Container image | ECR, AES-256 | Pulled over HTTPS | The execution role |
 | Log files (S3) | SSE-S3, public access blocked, expiring | TLS-only bucket policy | Narrow per-writer policy statements |
 | Client traffic | n/a | **HTTP only** (gap: needs a domain and an ACM certificate) | Limited by `alb_ingress_cidr` |
