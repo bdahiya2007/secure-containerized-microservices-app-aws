@@ -106,6 +106,25 @@ log_bucket_secure() {
 }
 ecr_ok() { [ "$(aws ecr describe-repositories --repository-names "$PROJECT" --query 'repositories[0].imageScanningConfiguration.scanOnPush' --output text)" = True ] && [ "$(aws ecr describe-images --repository-name "$PROJECT" --query 'length(imageDetails)' --output text)" -gt 0 ]; }
 
+# Fargate, not EC2: the service and every running task use the FARGATE launch type, the task definition is Fargate-only
+# with awsvpc networking, and the cluster owns no EC2 capacity (no container instances, no capacity providers).
+fargate_launch_type() {
+  [ "$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].launchType' --output text)" = FARGATE ] || return 1
+  local tasks t
+  tasks=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" --query taskArns --output text)
+  [ -n "$tasks" ] || return 1
+  for t in $tasks; do
+    [ "$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$t" --query 'tasks[0].launchType' --output text)" = FARGATE ] || return 1
+  done
+}
+fargate_task_definition() {
+  aws ecs describe-task-definition --task-definition "$SERVICE" --query 'taskDefinition.[requiresCompatibilities,networkMode,executionRoleArn]' --output json \
+    | py 'import json,sys; c,n,r=json.load(sys.stdin); assert c==["FARGATE"] and n=="awsvpc" and r'
+}
+no_ec2_capacity() {
+  aws ecs describe-clusters --clusters "$CLUSTER" --query 'clusters[0].[registeredContainerInstancesCount,length(capacityProviders)]' --output text | grep -q '^0[[:space:]]0$'
+}
+
 echo "Verifying $PROJECT in $AWS_REGION (read-only)"
 echo "--- drift and service"
 if [ "$SKIP_PLAN" = 1 ]; then skip "Terraform drift check (--skip-plan)"; else check "Terraform plan shows no changes (no drift)" no_drift; fi
@@ -131,6 +150,11 @@ check "VPC default security group is empty" default_sg_empty
 echo "--- IAM least privilege"
 check "Both ECS roles have the confused-deputy conditions" roles_conditions
 check "Task role has NO permissions (no attached or inline policies)" task_role_empty
+
+echo "--- Fargate (no EC2)"
+check "Service and every running task use the FARGATE launch type" fargate_launch_type
+check "Task definition is Fargate-only with awsvpc networking and an execution role" fargate_task_definition
+check "Cluster has no EC2 container instances and no capacity providers" no_ec2_capacity
 
 echo "--- scaling, monitoring and registry"
 check "Auto Scaling target and policies exist" scaling_configured
