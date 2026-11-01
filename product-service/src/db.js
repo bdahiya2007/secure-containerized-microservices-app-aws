@@ -44,11 +44,13 @@ function createDb({ credentials: creds = credentials, PoolImpl = Pool, env = pro
   }
 
   async function query(text, params) {
+    const seen = creds.version();
     try {
       return await (await getPool()).query(text, params);
     } catch (err) {
-      // The password was rotated since this task read the secret: fetch it again and retry once
-      if (err.code === INVALID_PASSWORD && creds.canRefresh() && (await creds.refresh())) {
+      // The password was rotated since this task read the secret. Retry once with the current one: if another request has
+      // already fetched it since this query started (the version changed) just retry, otherwise fetch it first.
+      if (err.code === INVALID_PASSWORD && creds.canRefresh() && (creds.version() !== seen || (await creds.refresh()))) {
         logger.warn('Database login failed, retrying with the current secret');
         return (await getPool()).query(text, params);
       }

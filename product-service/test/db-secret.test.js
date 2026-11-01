@@ -111,3 +111,18 @@ test('a failed fetch is not cached: the next call tries again', async () => {
   await assert.rejects(creds.get(), /AccessDenied/);
   assert.deepEqual(await creds.get(), secret('u', 'p'));
 });
+
+test('version() changes every time the secret is loaded', async () => {
+  let clock = 1000000;
+  const client = fakeClient(secret('u', 'a'), secret('u', 'b'));
+  const creds = create({ secretArn: ARN, client, now: () => clock });
+  const v0 = creds.version();
+  await creds.get();
+  const v1 = creds.version();
+  assert.notEqual(v1, v0);
+  await creds.get();
+  assert.equal(creds.version(), v1, 'the cache does not change it');
+  clock += 60000;
+  await creds.refresh();
+  assert.notEqual(creds.version(), v1);
+});
