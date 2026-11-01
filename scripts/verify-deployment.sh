@@ -31,7 +31,13 @@ ALB=$(tf_out alb_dns_name); LOG_BUCKET=$(tf_out log_bucket); ACCESS_BUCKET=$(tf_
 RDS_HOST=$(tf_out rds_endpoint)
 if [ -z "$ALB" ]; then echo "FAIL  no Terraform outputs found (is the stack applied, and are you in the right folder?)"; exit 1; fi
 CLUSTER="$PROJECT-cluster"; SERVICE="$PROJECT"
-TG=$(aws elbv2 describe-target-groups --names "$PROJECT-tg" --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null)
+# The target group that receives the traffic. With enable_blue_green, CodeDeploy alternates between "$PROJECT-tg" and
+# "$PROJECT-tg-green", so ask the listener instead of assuming the first one.
+LB_ARN=$(aws elbv2 describe-load-balancers --names "$PROJECT-alb" --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null)
+TG=$(aws elbv2 describe-listeners --load-balancer-arn "$LB_ARN" --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[?Weight>`0`].TargetGroupArn | [0]' --output text 2>/dev/null)
+if [ -z "$TG" ] || [ "$TG" = None ]; then
+  TG=$(aws elbv2 describe-target-groups --names "$PROJECT-tg" --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null)
+fi
 LB_JSON=$(aws elbv2 describe-load-balancers --names "$PROJECT-alb" --query 'LoadBalancers[0]' --output json 2>/dev/null)
 ALB_SG=$(echo "$LB_JSON" | py 'import json,sys; print(json.load(sys.stdin)["SecurityGroups"][0])')
 VPC_ID=$(echo "$LB_JSON" | py 'import json,sys; print(json.load(sys.stdin)["VpcId"])')
