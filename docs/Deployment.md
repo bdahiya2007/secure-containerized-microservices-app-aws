@@ -93,14 +93,14 @@ terraform apply tfplan                          # applies exactly that plan
 
 ## 4. Verify
 
-### Automated: 28 read-only checks
+### Automated: 31 read-only checks
 
 ```bash
 ./scripts/verify-deployment.sh              # includes a terraform plan (drift check)
 ./scripts/verify-deployment.sh --skip-plan  # faster; skips the drift check
 ```
 
-It takes a couple of minutes. Expect `27 passed, 0 failed, 1 skipped` with `--skip-plan`. Run it when no deployment is in progress.
+It takes a couple of minutes. Expect `30 passed, 0 failed, 1 skipped` with `--skip-plan`. Run it when no deployment is in progress.
 
 ### By hand
 

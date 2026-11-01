@@ -154,7 +154,7 @@ Infrastructure changes (Terraform) are still reviewed and applied by hand; the p
 | **S3 gateway endpoint** | Carries ECR image-layer traffic to S3 | Free; attached to the private route table | Pulls stay on the AWS network and bypass the NAT |
 | **Security groups** | Stateful firewalls for each tier | `alb`, `app`, `db`, chained (see [section 7](#7-network-security)) | Each accepts traffic only from the tier in front of it; every rule has a description |
 | **Application Load Balancer** | The only public entry point; spreads traffic over the tasks and checks their health | HTTP :80 listener, target group on :3000 with `/health` checks, 30-second connection draining, access logs on | Source range limited by `alb_ingress_cidr`; drops invalid HTTP headers. HTTP only and no authentication are gaps. |
-| **Amazon ECS on AWS Fargate** | Runs the containers with no servers to manage | Cluster with Container Insights; service of 2 to 4 tasks; 0.25 vCPU and 512 MB each; deployment circuit breaker with rollback; 60-second health-check grace period | `awsvpc` networking, no public IPs, non-root user, read-only root filesystem, no ECS Exec, task role with no permissions |
+| **Amazon ECS on AWS Fargate** | Runs the containers with no servers to manage | Cluster with Container Insights; service of 2 to 4 tasks; 0.25 vCPU and 512 MB each; CodeDeploy blue/green with automatic rollback (the deployment circuit breaker when `enable_blue_green` is off); 60-second health-check grace period | `awsvpc` networking, no public IPs, non-root user, read-only root filesystem, no ECS Exec, task role with no permissions |
 | **Amazon ECR** | Stores the container image | Repository `product-service`, scan on push, AES-256 encryption, keeps the last 10 images | Private; pulled only by the execution role. Mutable tags are a gap. |
 | **Amazon RDS for PostgreSQL** | Stores the products | PostgreSQL 18.6 on `db.t4g.micro`, 20 GB gp3, single-AZ, 7-day backups, tags copied to snapshots | In private subnets, **not publicly accessible**, encrypted at rest, reachable only from the app security group, no outbound rules |
 | **AWS Secrets Manager** | Holds the database credentials | RDS creates and manages the master password (`manage_master_user_password`); ECS injects it as `DB_PASSWORD` | No password in code, in the image, in Terraform variables or in state; the execution role can read this one secret only |
@@ -167,6 +167,24 @@ Infrastructure changes (Terraform) are still reviewed and applied by hand; the p
 | **AWS CloudTrail** *(optional)* | Records every API call in the account | Multi-region trail with log file validation, 90-day retention, writes to the central bucket | Audit trail of who changed what; digest files detect tampering. Account-wide. |
 | **AWS Budgets** | Cost alert | $5 monthly budget with alerts at 70, 80, 90 and 100 percent, plus a forecast alert | Limits the cost of a forgotten test stack |
 | **AWS SSO (IAM Identity Center)** | How the engineer signs in | PowerUserAccess permission set plus a scoped IAM policy | Short-lived credentials, no stored access keys |
+
+### Fargate instead of EC2: what differs
+
+This project has run on Fargate since its first deployment; it never had an EC2 launch type, so there was nothing to migrate. This section records what moving an ECS service from the EC2 launch type to Fargate involves and where each piece lives here, so the choice is explicit and checkable. The application is unchanged by it: the same image, port 3000, `/health`, ALB, database and secrets.
+
+| Concern | With the EC2 launch type | Fargate, as built here | Where |
+|---|---|---|---|
+| **Task definition** | `requiresCompatibilities = ["EC2"]`; any network mode; CPU and memory can be set per container | `["FARGATE"]`; `awsvpc` is required; CPU and memory are set for the whole task from the allowed pairs (256 and 512 here); `runtimePlatform` must match the image (X86_64, so the image is built with `--platform linux/amd64`) | `terraform/ecs.tf` |
+| **Service** | `launch_type = "EC2"`, or a capacity provider backed by an Auto Scaling group | `launch_type = "FARGATE"`; no capacity providers | `ecs.tf`, `codedeploy.tf` |
+| **Networking** | Tasks share the instance's network (`bridge` or `host`) with dynamic host ports; security groups sit on the instances | `awsvpc`: every task has its own network interface and private IP, and its own security group; the target group uses `target_type = "ip"`; tasks run in private subnets with no public IP and reach ECR and Secrets Manager through the NAT gateway (image layers through the S3 gateway endpoint) | `terraform/network.tf`, `ecs.tf` |
+| **IAM** | An instance role and instance profile (`ecsInstanceRole`) so the ECS agent can register and pull; a task execution role if secrets or log drivers need it; a task role | No instance role at all (there are no instances). Only the **execution role** (ECR pull, logs, read one secret) and the **task role** (empty); both trust `ecs-tasks.amazonaws.com` with `aws:SourceAccount` and `aws:SourceArn` conditions | `ecs.tf` |
+| **Capacity and patching** | You run, scale and patch the instances (AMI, agent, Docker) and keep them in step with task demand | AWS runs the compute; only the service's task count is scaled (Application Auto Scaling, 2 to 4 tasks) | `terraform/autoscaling.tf` |
+| **Host access** | SSH to instances, host volumes, privileged containers possible | None: read-only root filesystem, non-root user, no ECS Exec, no host mounts | `ecs.tf`, `product-service/Dockerfile` |
+| **Cost** | Instance hours, whether or not tasks fill them | Per task, per second, for the vCPU and memory requested (about $0.012 an hour for one 0.25 vCPU and 512 MB task in us-east-1, before the NAT gateway, ALB and RDS) | [Cost](#12-cost) |
+
+**What to check if you migrate a service like this:** that the image matches the CPU architecture; that the `awsvpc` security groups allow the load balancer to reach the task port; that the target group type is `ip`; that private subnets have a route to ECR (NAT or interface endpoints); and that the execution role can pull the image and read any secrets named in the task definition. Tasks that fail to start with an ECR or Secrets Manager error are almost always one of these.
+
+**Verification:** `scripts/verify-deployment.sh` has a "Fargate (no EC2)" section with three checks: the service and every running task report the `FARGATE` launch type; the task definition is `["FARGATE"]` only, uses `awsvpc` and has an execution role; and the cluster has no EC2 container instances and no capacity providers. On 2026-11-01 all three pass, and the two running tasks report platform version 1.4.0.
 
 ## 5. Defense in depth
 

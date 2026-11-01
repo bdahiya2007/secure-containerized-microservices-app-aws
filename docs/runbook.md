@@ -137,7 +137,7 @@ Then check `/products` (section 3). If you change `schema.sql`, `terraform apply
 
 ## 3. Verify the deployment
 
-**One command for all of it:** `scripts/verify-deployment.sh` runs about 28 read-only checks (Terraform drift, service and target health, the endpoints, security groups, the task role having no permissions, Auto Scaling, the dashboard, and each log) and prints PASS, FAIL or SKIP for each; optional logs that are switched off are skipped, not failed. It exits 0 only if nothing failed.
+**One command for all of it:** `scripts/verify-deployment.sh` runs about 31 read-only checks (Terraform drift, service and target health, the endpoints, security groups, the task role having no permissions, Auto Scaling, the dashboard, and each log) and prints PASS, FAIL or SKIP for each; optional logs that are switched off are skipped, not failed. It exits 0 only if nothing failed.
 Pass `--skip-plan` to leave out the Terraform drift check. It changes nothing in AWS. Run it after every deploy; the manual commands below show what it checks. If the targets or the log check fail right after a scale-in or a redeploy, wait a minute and run it again (it already retries those). It sends no traffic that changes data; successful `/health` checks are not logged, so a log check on a quiet service may need a few requests first.
 
 ```bash

@@ -194,7 +194,7 @@ scripts/
 ├── check-appspec.py      # offline check that appspec.yaml matches Terraform and every action is SHA-pinned
 ├── secret-scan.py        # secret and sensitive-data scanner (pre-commit hook)
 ├── install-hooks.sh      # enables the pre-commit hook for a clone
-└── verify-deployment.sh  # read-only check of a deployed stack: 28 checks on endpoints, security groups, IAM, logs, scaling
+└── verify-deployment.sh  # read-only check of a deployed stack: 31 checks on endpoints, security groups, IAM, logs, scaling
 .github/workflows/        # validate.yml (pull requests, no AWS access) and deploy.yml (push to main: build, push, CodeDeploy blue/green)
 .github/dependabot.yml    # weekly updates for GitHub Actions, npm packages, Docker base images and Terraform providers
 appspec.yaml              # CodeDeploy blue/green appspec (task definition placeholder filled in by deploy.yml)
