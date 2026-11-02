@@ -403,7 +403,7 @@ terraform -chdir=terraform destroy
 ```
 `plan -destroy` shows what will be deleted first; `destroy` asks you to type `yes`.
 
-This deletes the database and its data (`skip_final_snapshot = true`). The NAT gateway and ALB
+This deletes the database and its data (`skip_final_snapshot = true`), the ECR images and the log buckets with their contents. It takes about 10 to 15 minutes. If it stops with `ResourceInUse` on the green target group, run `plan -destroy` and `destroy` again: the listener that CodeDeploy pointed at it is gone by then (the Terraform now orders this correctly). The NAT gateway and ALB
 are the main hourly costs, so destroy demo environments promptly (about $0.14/hour in total).
 
 Confirm nothing is left billing:

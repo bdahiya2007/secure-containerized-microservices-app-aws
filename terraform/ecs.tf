@@ -251,6 +251,11 @@ resource "aws_lb_target_group" "app" {
 
 # Port 80. Without enable_https this is the only listener and the one CodeDeploy shifts traffic on.
 resource "aws_lb_listener" "http" {
+  # With blue/green, CodeDeploy points this listener at the green target group too, which Terraform cannot see. Without this
+  # dependency a destroy can try to delete the green group while the listener still uses it (ResourceInUse, found when the
+  # stack was destroyed). With it, the listener is deleted first. It changes nothing on create.
+  depends_on = [aws_lb_target_group.green]
+
   load_balancer_arn = aws_lb.app.arn
   port              = 80
   protocol          = "HTTP"
@@ -277,6 +282,11 @@ resource "aws_lb_listener" "http" {
 # HTTPS (enable_https). This listener becomes the one CodeDeploy shifts traffic on (see codedeploy.tf), so it has the same
 # lifecycle rules as the HTTP listener above. Port 80 then only redirects.
 resource "aws_lb_listener" "https" {
+  # With blue/green, CodeDeploy points this listener at the green target group too, which Terraform cannot see. Without this
+  # dependency a destroy can try to delete the green group while the listener still uses it (ResourceInUse, found when the
+  # stack was destroyed). With it, the listener is deleted first. It changes nothing on create.
+  depends_on = [aws_lb_target_group.green]
+
   count = var.enable_https ? 1 : 0
 
   load_balancer_arn = aws_lb.app.arn
