@@ -48,7 +48,8 @@ flowchart LR
 6. **Start the CodeDeploy deployment** with `appspec.yaml`, where `<TASK_DEFINITION>` is replaced by the new revision's ARN.
 7. **CodeDeploy** starts the new tasks in the idle target group and waits for them to pass the ALB health check (`/health`).
 8. **Traffic shifts** gradually (`CodeDeployDefault.ECSLinear10PercentEvery1Minutes`, about 10 minutes). The old tasks stay for 5 minutes after the switch, so a rollback is instant.
-9. **Automatic rollback.** If the new tasks never become healthy, traffic never moves and the deployment fails. The workflow fails and prints CodeDeploy's error.
+9. **`:latest` moves to the deployed image.** After a successful deployment the image also gets the `latest` tag, so a service that Terraform creates or recreates can always pull its image (see the table below).
+10. **Automatic rollback.** If the new tasks never become healthy, traffic never moves and the deployment fails. The workflow fails and prints CodeDeploy's error.
 
 ## One-time setup
 
@@ -196,4 +197,5 @@ Running against AWS exposed four problems that offline checks could not. All are
 | Deploy failed at the AWS login | `AWS_DEPLOY_ROLE_ARN` was empty (a hidden paste in `gh secret set` came through empty) | Set the secret from the Terraform output with `printf '%s' "$ARN" \| gh secret set` |
 | `terraform apply` failed creating the service | ECS keeps a deleted service in `DRAINING`, so the same name cannot be reused at once | Wait for `INACTIVE` and re-run the apply (documented in step 5) |
 | `verify-deployment.sh` rollout check failed | A CodeDeploy-controlled service reports no `deployments`; steady state is on the task set | The script reads the primary task set when the controller is `CODE_DEPLOY` |
+| A service recreated by Terraform could not start: `CannotPullContainerError ... failed to resolve ref` | Terraform's task definition names `:latest`. The pipeline pushes only commit-SHA tags, and the ECR rule "keep the last 10 images" had expired the original `latest` image, so the tag no longer existed (found when enabling Fargate Spot, which replaces the service; about 7 minutes of extra outage) | `:latest` was re-created by hand on the running image, and the workflow now moves `:latest` to every image that passed the scan and deployed successfully |
 | Deploy failed at the ECR scan wait | `aws ecr wait image-scan-complete` fails with `ScanNotFoundException` right after the push | The step polls the scan status for up to 5 minutes |

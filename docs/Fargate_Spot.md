@@ -2,7 +2,7 @@
 
 The service can run on a **mix of on-demand Fargate and Fargate Spot** to lower the compute bill without giving up availability. It is controlled by one Terraform switch, `enable_fargate_spot`, which is **off by default**. This page explains the design, how to turn it on, how to check it, and what can go wrong. The general EC2/Fargate comparison is in [EC2_vs_Fargate.md](EC2_vs_Fargate.md).
 
-> **Status (2026-11-01): written and validated offline and against the live stack's plan; not enabled in AWS.** The Terraform plans, the appspec renderer, the verify checks and the workflow syntax were tested. Nothing has been applied, and no task has run on Spot yet, so the interruption behaviour described below comes from AWS's documentation and has not been observed in this project.
+> **Status (2026-11-02): enabled and tested live once; one high-availability gap found and open.** The service ran on one `FARGATE` and one `FARGATE_SPOT` task. Stopping the Spot task cost **no failed requests**, but both tasks sat in the **same Availability Zone**, so a zone failure would take the service down. See [Live test](#live-test-2026-11-02). Enabling it also exposed a missing-image problem, now fixed in the pipeline.
 
 ## What Fargate Spot is
 
@@ -88,6 +88,7 @@ Do the steps in this order. The first two are needed even if you never enable Sp
    terraform apply -var enable_fargate_spot=true -replace='aws_ecs_service.blue_green[0]'
    ```
    The one change is the marker resource (`terraform_data.capacity_strategy`) getting its new value; the add and the destroy are the service. (If you skipped step 3 the plan shows 3 adds and 1 destroy, because the capacity providers and the marker are created in the same run.) If the apply stops with `Unable to Start a service that is still Draining`, wait until the old service shows `INACTIVE`, then run the same apply **without** `-replace`.
+   Two things to expect after the replacement: the Application Auto Scaling target and policies are dropped by AWS when the service is deleted, so run `terraform plan` (it shows 3 to add) and `terraform apply` again; and a service that Terraform creates starts from Terraform's task definition, which names the `:latest` image, so that tag **must exist in ECR** (the deploy workflow keeps it up to date; if it is missing the tasks fail with `CannotPullContainerError`). Check with `aws ecr describe-images --repository-name product-service --image-ids imageTag=latest`.
 5. **Keep it on:** add `enable_fargate_spot = true` to `terraform/demo.auto.tfvars` (git-ignored), then `terraform plan` should say no changes.
 6. **Deploy once** (`gh workflow run deploy.yml`) so the application runs through the appspec path with the strategy, and check the log line `Capacity provider strategy: [...]` in the `Start the CodeDeploy blue/green deployment` step.
 
@@ -127,9 +128,24 @@ AWS documents the stop code as `SpotInterruption` in some places and `Terminatio
 
 You cannot trigger a real Spot interruption on demand. To test how the service copes with losing a task, stop one by hand (`aws ecs stop-task`) and watch ECS replace it and the target group recover. That tests recovery and the on-demand floor, not the two-minute warning.
 
+## Live test (2026-11-02)
+
+Enabled with `terraform apply -var enable_fargate_spot=true -replace='aws_ecs_service.blue_green[0]'` on the running stack, with a request every 2 seconds recording availability.
+
+| What | Result |
+|---|---|
+| The strategy | `FARGATE` (base 1, weight 1) and `FARGATE_SPOT` (weight 3); the two tasks ran one on each provider |
+| Outage while replacing the service | About 9.5 minutes (00:42 to 00:52 UTC). About 7 of them were the missing `:latest` image (below); without it, expect about 3 to 4 minutes (old service deleted, new tasks started) |
+| Stopping the Spot task by hand | **41 of 41 requests returned 200** (`/health` and `/products`). The on-demand task served alone; ECS noticed in about 33 seconds, started a replacement on Spot, and it was running about 85 seconds after the stop |
+| **Zone spread** | **Both tasks were in `us-east-1b`, three times running** (the first placement, 14 minutes of waiting for ECS to rebalance, and the Spot replacement). Zone rebalancing was `ENABLED` and did nothing |
+
+**The missing image.** The new service started from Terraform's task definition, which names `:latest`. That tag no longer existed: the ECR rule "keep the last 10 images" had expired it, because the pipeline pushes only commit-SHA tags. Tasks failed with `CannotPullContainerError ... failed to resolve ref`. The tag was re-created by hand on the running image (a few seconds, and the tasks started within a minute), and the deploy workflow now moves `:latest` to every successfully deployed image so it cannot happen again.
+
+**The zone gap.** My explanation, not proven: ECS spreads tasks across zones within a capacity provider, and with one task per provider each is placed on its own, so both can land in one zone. This means the default (`fargate_base = 1`) survives a Spot reclaim, which was tested, but **not** the loss of a zone. Options: keep it and accept the risk; set `fargate_base = 2` so two on-demand tasks (one provider, which can spread them) are always running, with Spot only above two tasks (no saving at the two-task baseline, and the zone spread is untested); or turn Spot off. Changing the base replaces the service again.
+
 ## Limits and next steps
 
-- **Not enabled or tested in AWS.** The first apply and the first Spot deployment may need fixes; this page will be updated with the result.
+- **Tested once, on two tasks.** Enabling it and stopping a Spot task were tested live (see above); a real Spot reclaim, the two-minute warning, and scale-out onto Spot have not been seen. The first test found the missing `:latest` image and the zone-spread gap.
 - **Strategy changes replace the service** (a short outage), like the blue/green switch.
 - **No fallback to on-demand** when Spot is short. A CloudWatch alarm on running tasks below the minimum would tell you; there are no alarms yet.
 - **No interruption alerts.** An EventBridge rule on `ECS Task State Change` with the Spot stop code could write interruptions to a log group or send a notification; not built.
