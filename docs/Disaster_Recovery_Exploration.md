@@ -82,6 +82,22 @@ What Region B needs, each of which is a Terraform resource or group:
 5. **Verify:** `/health`, `/products`, and that writes land on the new primary.
 6. **Fail back:** when Region A is healthy again, a **switchover** (RPO 0) returns the primary, then scale Region B down again.
 
+## Alternatives considered (cheaper, but not what the exercise asks for)
+
+Aurora Global Database is the exercise's requirement, so it stays the Step 2 target. These are the cheaper options if the goal were only to survive a Region loss on a small budget. They keep the same Region B pilot-light pieces (network, one ECS task, Route 53 failover) and differ only in how the data gets there.
+
+| Option | How it works | RPO / RTO | Cost | Secrets Manager |
+|---|---|---|---|---|
+| **1. RDS PostgreSQL cross-Region read replica** | Keep the current RDS instance and add an encrypted replica in us-west-2 (needs a KMS key there). In a disaster, **promote it by hand**; for PostgreSQL the replica is not promoted automatically, even if the source is deleted | RPO: replication lag, which AWS says is higher across Regions. RTO: promotion plus the ECS scale-up and DNS steps, so likely minutes to tens of minutes (not measured) | One more small instance (about the price of the current one, an estimate) plus cross-Region transfer | **Blocked the same way as Aurora:** AWS lists "creating a read replica when the source DB manages credentials with Secrets Manager" as unsupported. The managed secret would have to be replaced by a self-managed one first |
+| **2. Cross-Region backup replication** | RDS copies snapshots **and transaction logs** to us-west-2 as soon as they are ready; in a disaster, restore to a point in time there and build Region B with Terraform | RPO: depends on how current the shipped logs are (AWS gives no figure). RTO: hours, because the database is restored and the stack rebuilt | Lowest: nothing runs in Region B, only backup storage and transfer | Works: restore, then turn on managed credentials with a modify. Limit of 20 replicated backups per account |
+| **3. Aurora Global Database** | As above | RPO seconds; RTO minutes | About $7 a day (estimate) | Needs a self-managed replicated secret |
+
+What this changes:
+
+- **The Secrets Manager conflict is not Aurora's alone.** Options 1 and 3 both need the self-managed, replicated secret (options A to C above). Only option 2 keeps the current secret design unchanged.
+- **Option 2 is the only one that costs almost nothing while idle.** It also has the slowest recovery, and it relies on the Terraform stack being rebuildable in a new Region, which the project already supports.
+- **Choosing:** for the exercise, build option 3. For a real small workload with a tight budget, option 1 is the middle ground and option 2 the minimum. If the budget decision rules out a day of option 3, a smaller exercise is to document the design and run only a short switchover and failover drill, as in the test plan below.
+
 ## Targets, with the reasoning
 
 | Target | Proposed | Why |
@@ -130,4 +146,7 @@ Because one cluster of a global database cannot be stopped on its own, **the onl
 - [Supported Regions and DB engines for Aurora Serverless](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Concepts.Aurora_Fea_Regions_DB-eng.Feature.ServerlessV2.html)
 - [Performance and scaling for Aurora Serverless](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.setting-capacity.html)
 - [Scaling to zero ACUs with automatic pause and resume](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2-auto-pause.html)
+- [Creating a read replica in a different AWS Region](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.XRgn.html) (RDS)
+- [Password management with Amazon RDS and AWS Secrets Manager](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html) (limitations)
+- [Replicating automated backups to another AWS Region](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReplicateBackups.html) (RDS)
 - [Aurora pricing](https://aws.amazon.com/rds/aurora/pricing/) (figures taken from its worked examples; confirm on the pricing calculator)
