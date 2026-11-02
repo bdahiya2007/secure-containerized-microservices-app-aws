@@ -142,7 +142,7 @@ Infrastructure changes (Terraform) are still reviewed and applied by hand; the p
 | Pull request checks | Secret scan, Semgrep (code), `npm audit` and Trivy (libraries, image, Dockerfile), Checkov (Terraform), unit tests; none has AWS access | Findings fixed or recorded as reviewed exceptions: see [vulnerability-scan-report.md](vulnerability-scan-report.md) |
 | GitHub Actions deploy | Authenticates through GitHub OIDC to a role limited to one ECR repository, task definitions and one CodeDeploy deployment group | No stored AWS keys; only reviewed code on `main` can assume the role |
 | ECR push and scan | Image tagged with the commit SHA; ECR scans it and the job stops on a CRITICAL finding | Each running image maps to one commit |
-| CodeDeploy blue/green | New tasks start in the idle target group and must pass the ALB health check before traffic shifts, 10% per minute; old tasks stay 5 minutes | Safe releases, automatic rollback on failure (rollback not yet exercised) |
+| CodeDeploy blue/green | New tasks start in the idle target group and must pass the ALB health check before traffic shifts, 10% per minute; old tasks stay 5 minutes | Safe releases; the automatic rollback was tested with a broken release ([Rollback_Test.md](Rollback_Test.md)) |
 | `terraform plan -out`, then `apply` of the saved plan | What you reviewed is exactly what is applied (infrastructure, by hand) | No surprise changes |
 
 ## 4. AWS services and how each is secured
@@ -344,7 +344,7 @@ The commands to turn each on and read it are in the [logging runbook](Logging_Ru
 |---|---|---|
 | Spread over zones | Tasks in two private subnets (two zones); ALB across two public subnets | 2 tasks per zone at 4 tasks in the test |
 | Scale out and in | Auto Scaling, 2 to 4 tasks, CPU and request-rate targets | Scale-out 2 to 4 within about 6 minutes of sustained load; scale-in began about 18 minutes after the load ended |
-| Safe releases | CodeDeploy blue/green with automatic rollback, 60-second grace period, 30-second drain | Four successful deployments; the rollback path was not exercised |
+| Safe releases | CodeDeploy blue/green with automatic rollback, 60-second grace period, 30-second drain | Many successful deployments; a broken release was tested: no failed request and a rollback in about 35 seconds, but CodeDeploy did not fail it by itself in 30 minutes ([Rollback_Test.md](Rollback_Test.md)) |
 | Self-healing | ECS replaces failed tasks; the ALB health check stops sending traffic to an unhealthy one | Not yet tested by stopping a task |
 | Data durability | 7-day automated RDS backups | Not restored in a test |
 | **Gaps** | One NAT gateway (zone A) and a single-AZ database: a zone failure would affect outbound access or the database | |

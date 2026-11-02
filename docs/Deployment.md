@@ -127,12 +127,12 @@ The load balancer accepts port 80 only from the address in `alb_ingress_cidr`. I
 
 | Situation | What to do |
 |---|---|
-| The new tasks never become healthy | Nothing: CodeDeploy stops, traffic stays on the old tasks, the workflow fails. Read the error (section 6) |
+| The new tasks never become healthy | **Users are protected:** traffic stays on the old tasks (tested: no failed request). But CodeDeploy does **not** fail the deployment quickly: it kept retrying for over 30 minutes in the test, and the workflow stays running. Stop it: `aws deploy stop-deployment --deployment-id <id> --auto-rollback-enabled`; the broken tasks are removed in about 35 seconds. Read the cause in the ECS service events and the app log (section 6) |
 | A bad release got through while traffic is shifting or in the 5-minute wait | `aws deploy stop-deployment --deployment-id <id> --auto-rollback-enabled`; or stop it in the CodeDeploy console |
 | A bad release is fully live | Revert the commit through a pull request. The pipeline deploys the reverted code (about 16 minutes). To redeploy an older commit right away, run the workflow from a branch that has it |
 | The deployment group or service is broken | `terraform apply -var enable_blue_green=false` returns to rolling updates (replaces the service, short outage) |
 
-The automatic rollback has not been exercised yet; see [TODO](CICD.md#limitations-and-next-steps).
+The rollback was tested on 2026-11-02 with a deliberately broken release ([Rollback_Test.md](Rollback_Test.md)): users were not affected and the rollback took about 35 seconds. Note that CodeDeploy does not fail a crashing release by itself quickly (still `InProgress` after 30 minutes), so you may need to stop it yourself with `stop-deployment` (see the table above).
 
 ## 6. Debug
 
