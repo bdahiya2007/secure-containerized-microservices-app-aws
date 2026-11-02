@@ -100,7 +100,7 @@ flowchart LR
 ### Known network limits
 
 - **Single NAT gateway:** if zone A fails, tasks in zone B lose outbound access (image pulls, secret reads, logs). One NAT per zone fixes this at about $0.045/hr more each.
-- **HTTP only:** the listener is on port 80 with no TLS between the client and the ALB.
+- **HTTP only:** the listener is on port 80 with no TLS between the client and the ALB. With `enable_https` (off by default, not yet applied) it serves HTTPS and redirects port 80; see [../docs/HTTPS_and_Domain.md](../docs/HTTPS_and_Domain.md).
 - **Single-AZ database:** a zone failure takes the database down until RDS recovers it; set `multi_az = true` for a standby.
 - **Outbound HTTPS to the whole internet:** the `app` group allows TCP 443 to `0.0.0.0/0` (and PostgreSQL to the database group, nothing else), because the targets are AWS public endpoints behind a NAT. Interface VPC endpoints for ECR, Secrets Manager and CloudWatch Logs would let you remove even that, at about $0.01 an hour per endpoint per zone.
 

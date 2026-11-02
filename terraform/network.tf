@@ -100,15 +100,27 @@ resource "aws_vpc_endpoint" "s3" {
 # ---- Security groups: internet -> ALB -> app -> database ----
 resource "aws_security_group" "alb" {
   name_prefix = "${var.project_name}-alb-"
-  description = "Application Load Balancer: HTTP from the internet, forwards to the app on port 3000"
+  description = "Application Load Balancer: HTTP (and HTTPS when enabled) from the allowed CIDR, forwards to the app on port 3000"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "HTTP from the allowed CIDR (the internet by default)"
+    description = "HTTP from the allowed CIDR"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = [var.alb_ingress_cidr]
+  }
+
+  # HTTPS (enable_https): port 80 stays open only to answer with a redirect to 443
+  dynamic "ingress" {
+    for_each = var.enable_https ? [1] : []
+    content {
+      description = "HTTPS from the allowed CIDR"
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = [var.alb_ingress_cidr]
+    }
   }
 
   egress {

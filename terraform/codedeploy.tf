@@ -81,7 +81,7 @@ resource "aws_ecs_service" "blue_green" {
     container_port   = 3000
   }
 
-  depends_on = [aws_lb_listener.http, aws_ecs_cluster_capacity_providers.main]
+  depends_on = [aws_lb_listener.http, aws_lb_listener.https, aws_ecs_cluster_capacity_providers.main]
 
   # Each of these is changed by something other than Terraform:
   #  - desired_count: Auto Scaling (autoscaling.tf)
@@ -171,7 +171,8 @@ resource "aws_codedeploy_deployment_group" "app" {
   load_balancer_info {
     target_group_pair_info {
       prod_traffic_route {
-        listener_arns = [aws_lb_listener.http.arn]
+        # With enable_https, the 443 listener carries the traffic and port 80 only redirects
+        listener_arns = [var.enable_https ? aws_lb_listener.https[0].arn : aws_lb_listener.http.arn]
       }
 
       target_group {

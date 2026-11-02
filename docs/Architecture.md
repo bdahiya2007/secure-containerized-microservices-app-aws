@@ -293,7 +293,7 @@ Other network controls: tasks and the database have no public IPs; the private r
 | Database credentials | In Secrets Manager, created and managed by RDS, rotated automatically every 7 days (the secret's metadata shows a first rotation shortly after creation; a forced rotation was tested live: a retry race was found and fixed, and the re-test passed; see [Secrets.md](Secrets.md#live-rotation-test)) | Fetched by the app at runtime over TLS with its task role, and again after a rotation ([Secrets.md](Secrets.md)) | The task role, for that one secret; never in code, image, task definition, variables or state |
 | Container image | ECR, AES-256 | Pulled over HTTPS | The execution role |
 | Log files (S3) | SSE-S3, public access blocked, expiring | TLS-only bucket policy | Narrow per-writer policy statements |
-| Client traffic | n/a | **HTTP only** (gap: needs a domain and an ACM certificate) | Limited by `alb_ingress_cidr` |
+| Client traffic | n/a | **HTTP only** (gap: needs a domain and an ACM certificate) | Limited by `alb_ingress_cidr` Update: `enable_https` is written (off by default, not yet applied): see [HTTPS_and_Domain.md](HTTPS_and_Domain.md). |
 
 ## 9. Logging, monitoring and detection
 
@@ -359,7 +359,7 @@ These are deliberate demo trade-offs or work not yet done. The full table, with 
 
 | Gap | Why it matters |
 |---|---|
-| HTTP only, no authentication, no WAF | Traffic is unencrypted and anyone allowed through the security group can read the products. The fix needs a domain and certificate. |
+| HTTP only, no authentication, no WAF | Traffic is unencrypted and anyone allowed through the security group can read the products. The fix needs a domain and certificate. Update: an HTTPS switch is written, not yet applied ([HTTPS_and_Domain.md](HTTPS_and_Domain.md)); authentication and a WAF are still open. |
 | Database TLS does not verify the server certificate | A network-position attacker could in theory impersonate the database |
 | Mutable ECR tags | `latest` can be overwritten, and rollbacks by tag are unreliable |
 | Single NAT gateway and single-AZ RDS | Not resilient to a zone failure |

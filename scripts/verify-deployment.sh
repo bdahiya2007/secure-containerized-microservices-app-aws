@@ -27,14 +27,15 @@ py() { python3 -I -c "$1"; }
 
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
 if [ -z "$ACCOUNT" ]; then echo "FAIL  AWS session is not valid (try: aws sso login)"; exit 1; fi
-ALB=$(tf_out alb_dns_name); LOG_BUCKET=$(tf_out log_bucket); ACCESS_BUCKET=$(tf_out s3_access_log_bucket)
+ALB=$(tf_out alb_dns_name); BASE=$(tf_out app_url); LOG_BUCKET=$(tf_out log_bucket); ACCESS_BUCKET=$(tf_out s3_access_log_bucket)
 RDS_HOST=$(tf_out rds_endpoint)
+LPORT=80; case "$BASE" in https://*) LPORT=443 ;; esac   # the listener CodeDeploy shifts traffic on
 if [ -z "$ALB" ]; then echo "FAIL  no Terraform outputs found (is the stack applied, and are you in the right folder?)"; exit 1; fi
 CLUSTER="$PROJECT-cluster"; SERVICE="$PROJECT"
 # The target group that receives the traffic. With enable_blue_green, CodeDeploy alternates between "$PROJECT-tg" and
 # "$PROJECT-tg-green", so ask the listener instead of assuming the first one.
 LB_ARN=$(aws elbv2 describe-load-balancers --names "$PROJECT-alb" --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null)
-TG=$(aws elbv2 describe-listeners --load-balancer-arn "$LB_ARN" --query 'Listeners[0].DefaultActions[0].ForwardConfig.TargetGroups[?Weight>`0`].TargetGroupArn | [0]' --output text 2>/dev/null)
+TG=$(aws elbv2 describe-listeners --load-balancer-arn "$LB_ARN" --query "Listeners[?Port==\`$LPORT\`]|[0].DefaultActions[0].ForwardConfig.TargetGroups[?Weight>\`0\`].TargetGroupArn | [0]" --output text 2>/dev/null)
 if [ -z "$TG" ] || [ "$TG" = None ]; then
   TG=$(aws elbv2 describe-target-groups --names "$PROJECT-tg" --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null)
 fi
@@ -62,10 +63,10 @@ targets_healthy_and_match() {
   [ -n "$states" ] && [ "$(echo "$states" | wc -l)" = "$running" ] && ! echo "$states" | grep -qv '^healthy$'
 }
 http_code() { curl -s -m 10 -o /dev/null -w '%{http_code}' "$1"; }
-health_ok() { [ "$(http_code "http://$ALB/health")" = 200 ] && curl -s -m 10 "http://$ALB/health" | grep -q '"ok"'; }
-products_ok() { curl -s -m 10 "http://$ALB/products" | py 'import json,sys; d=json.load(sys.stdin); assert len(d)>=1 and all(isinstance(p["price"],(int,float)) for p in d)'; }
-not_found_404() { [ "$(http_code "http://$ALB/nope")" = 404 ]; }
-request_id_header() { curl -s -m 10 -D - -o /dev/null "http://$ALB/nope" | grep -qi '^x-request-id: '; }
+health_ok() { [ "$(http_code "$BASE/health")" = 200 ] && curl -s -m 10 "$BASE/health" | grep -q '"ok"'; }
+products_ok() { curl -s -m 10 "$BASE/products" | py 'import json,sys; d=json.load(sys.stdin); assert len(d)>=1 and all(isinstance(p["price"],(int,float)) for p in d)'; }
+not_found_404() { [ "$(http_code "$BASE/nope")" = 404 ]; }
+request_id_header() { curl -s -m 10 -D - -o /dev/null "$BASE/nope" | grep -qi '^x-request-id: '; }
 alb_single_cidr() { aws ec2 describe-security-groups --group-ids "$ALB_SG" --query 'SecurityGroups[0].IpPermissions[].IpRanges[].CidrIp' --output text | tr '\t' '\n' | grep -qE '^[0-9.]+/32$'; }
 alb_not_open() { ! aws ec2 describe-security-groups --group-ids "$ALB_SG" --query 'SecurityGroups[0].IpPermissions[].IpRanges[].CidrIp' --output text | grep -q '0\.0\.0\.0/0'; }
 tasks_private() {
