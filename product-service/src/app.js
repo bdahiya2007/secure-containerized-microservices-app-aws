@@ -71,6 +71,16 @@ app.get('/products', async (req, res) => {
   }
 });
 
+// A small landing response for the bare address. It names the service and its two routes and nothing else (no version,
+// commit, Region or infrastructure detail), and it needs no database, so it answers even when /health reports 503.
+app.get('/', (req, res) => {
+  res.json({
+    service: 'product-service',
+    status: 'ok',
+    endpoints: { products: '/products', health: '/health' },
+  });
+});
+
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
