@@ -98,13 +98,14 @@ resource "aws_vpc_endpoint" "s3" {
 }
 
 # ---- Security groups: internet -> ALB -> app -> database ----
+# The group description is kept as first created: AWS cannot change it in place, so editing it replaces the group
 resource "aws_security_group" "alb" {
   name_prefix = "${var.project_name}-alb-"
-  description = "Application Load Balancer: HTTP (and HTTPS when enabled) from the allowed CIDR, forwards to the app on port 3000"
+  description = "Application Load Balancer: HTTP from the internet, forwards to the app on port 3000"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "HTTP from the allowed CIDR"
+    description = "HTTP from the allowed CIDR (the internet by default)"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
