@@ -215,7 +215,7 @@ Everything above was verified on 2026-10-31. These later changes were deployed t
 | **Forced password rotation** | Took about 70 seconds. A request every 2 seconds all returned 200 (51 of 51). A burst of 40 parallel requests right after returned 34 × 200 and 6 × 500: a retry race. After the fix a second rotation returned 40 of 40, then 60 of 60 parallel requests and 39 of 39 steady requests with status 200 (9 retries logged, no errors) |
 | **Verify script** | 31 passed, 0 failed, 1 skipped at the time of the runtime-secret rollout (33 checks; the one advisory warning was the execution role's temporary secret access, removed in phase 2) |
 
-**Still not tested:** a rollback of a bad deployment, scaling under real load, stopping a task, and a rotation under sustained heavy load or during a deployment.
+**Tested after this update (2026-11-02):** scaling under real load (a 6-minute, 20,056-request test: scale-out to 4 tasks including one on Spot, scale-in back to 2, no 5XX; see [Load_Test_and_Optimization.md](Load_Test_and_Optimization.md)), stopping a task (a Spot task, then recovery in about 85 seconds with no failed request), and a rollback of a bad deployment ([Rollback_Test.md](Rollback_Test.md)). **Still not tested:** a rotation under sustained heavy load or during a deployment, and a CodeDeploy deployment that fails by itself.
 
 ## Teardown
 
