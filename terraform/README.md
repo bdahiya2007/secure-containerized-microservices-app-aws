@@ -150,7 +150,7 @@ flowchart LR
 | `log_retention_days` | `30` | Days ALB and S3 access logs are kept in the central log bucket |
 | `cloudtrail_log_retention_days` | `90` | Days CloudTrail logs are kept |
 | `enable_fargate_spot` | `false` | Run part of the service on Fargate Spot with a capacity provider strategy: `fargate_base` on-demand tasks first, then the rest split by `fargate_weight` and `fargate_spot_weight`. **Replaces the ECS service** (short outage). See [docs/Fargate_Spot.md](../docs/Fargate_Spot.md) |
-| `fargate_base` | `1` | Tasks that always run on on-demand Fargate (1 to 100); at least one keeps the service up when Spot is reclaimed |
+| `fargate_base` | `2` | Tasks that always run on on-demand Fargate (1 to 100); at least one keeps the service up when Spot is reclaimed |
 | `fargate_weight` / `fargate_spot_weight` | `1` / `3` | Relative share of the tasks above the base on on-demand Fargate and on Fargate Spot (not both 0) |
 | `enable_blue_green` | `false` | Deploy with CodeDeploy blue/green (started by GitHub Actions) instead of ECS rolling updates. **Replaces the ECS service** (short outage). Creates a second target group, the CodeDeploy application, deployment group and service role. See [docs/CICD.md](../docs/CICD.md) |
 | `codedeploy_deployment_config` | `CodeDeployDefault.ECSLinear10PercentEvery1Minutes` | How CodeDeploy shifts traffic (only with `enable_blue_green`) |

@@ -134,9 +134,9 @@ variable "enable_fargate_spot" {
 }
 
 variable "fargate_base" {
-  description = "Tasks that always run on on-demand Fargate (only used when enable_fargate_spot is true). At least 1, so the service keeps running when Spot capacity is reclaimed."
+  description = "Tasks that always run on on-demand Fargate (only used when enable_fargate_spot is true). At least 1, so the service keeps running when Spot capacity is reclaimed. The default of 2 matches the Auto Scaling minimum: two tasks of one provider are spread across Availability Zones, while one task per provider was not (docs/Fargate_Spot.md)."
   type        = number
-  default     = 1
+  default     = 2
 
   validation {
     condition     = var.fargate_base >= 1 && var.fargate_base <= 100
