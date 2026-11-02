@@ -49,7 +49,7 @@ What this shows:
 
 ### A second run: a rotation under load
 
-The same day a second, heavier run (20 workers, about 86 requests a second, 5,448 requests in the peak minute) was combined with a forced database password rotation. 33,754 of 33,755 requests returned 200, and Auto Scaling added tasks in the middle of the rotation. Details and the chart are in [Secrets.md](Secrets.md#rotation-under-sustained-load). It was planned as 15 minutes, but the load generator's machine went to sleep after 6.5 minutes, so this run does **not** replace a longer test: the longest clean runs so far are 8 minutes (33,600 requests) and 6.5 minutes (33,755 requests), all without a 5XX apart from the one rotation-window failure.
+The same day a second, heavier run (20 workers, about 86 requests a second, 5,448 requests in the peak minute) was combined with a forced database password rotation. 33,754 of 33,755 requests returned 200, and Auto Scaling added tasks in the middle of the rotation. Details and the chart are in [Secrets.md](Secrets.md#rotation-under-sustained-load). It was planned as 15 minutes, but the load generator's machine went to sleep after 6.5 minutes. A third run, a rotation during a deployment ([Secrets.md](Secrets.md#rotation-during-a-bluegreen-deployment)), then ran **20.5 minutes without a gap** at a lighter rate (about 13 requests a second, 15,953 requests): no 5XX apart from two requests inside the rotation window, and 0 unhealthy hosts. So the longest clean run is now 20.5 minutes; the highest rate is the 86 requests a second of the second run.
 
 ### What the test does not show
 

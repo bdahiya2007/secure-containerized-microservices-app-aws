@@ -9,8 +9,8 @@ This page is the evidence that the CodeDeploy blue/green deployment protects use
 | Question | Answer |
 |---|---|
 | Did the broken release pass the pipeline's checks? | **Yes**: 28 unit tests, the secret scan and the image build and ECR scan all passed. It is the kind of bad release only a deployment can catch. |
-| Did any user request fail? | **No.** 593 of 593 probe requests (`/health` and `/products`, one pair about every 3 seconds, for 33 minutes) returned 200. CloudWatch saw 1,162 requests, all 2XX, **0 target 5XX and 0 load-balancer 5XX**. |
-| Did the broken tasks ever receive traffic? | **No.** The listener stayed 100% on the original (blue) target group. The new (green) target group never had a healthy host. |
+| Did any user request fail? | **No request failed among those sent.** 593 of 593 probe requests (`/health` and `/products`) returned 200, and CloudWatch saw 1,162 requests, all 2XX, **0 target 5XX and 0 load-balancer 5XX**. **Caveat:** the probe has a 9-minute hole (03:03:56 to 03:13:03) because the laptop running it went to sleep, so no request was sent in that gap. The gap is covered by the load balancer's health metrics instead (next row). |
+| Did the broken tasks ever receive traffic? | **No.** The listener stayed 100% on the original (blue) target group. The new (green) target group never had a healthy host. These facts come from AWS itself (CloudWatch `HealthyHostCount` in every minute, ECS events and the CodeDeploy record), so they hold across the probe's gap. |
 | Did CodeDeploy fail the deployment by itself? | **Not within 30 minutes.** It kept retrying the crashing tasks. This is a finding (see below). |
 | Did the rollback work? | **Yes.** Stopping the deployment with automatic rollback created rollback deployment `d-M280998LM`, which succeeded in 3 seconds; the broken task set was gone about 35 seconds after the stop. |
 | Was the final state correct? | **Yes.** The service is back on its original task set (task definition 7), 2 tasks steady, and the `latest` image tag did not move. |
@@ -19,7 +19,7 @@ This page is the evidence that the CodeDeploy blue/green deployment protects use
 
 - **The broken release.** A throwaway branch (`test/rollback-broken-entrypoint`, never merged, deleted afterwards) changed one line of the Dockerfile so the container starts `node src/server-BROKEN-ROLLBACK-TEST.js`, a file that does not exist. The unit tests run from the source tree, so they still pass, and the image builds and passes the scan. The container exits immediately with `MODULE_NOT_FOUND`.
 - **How it was deployed.** The real `Deploy` workflow was started by hand (`workflow_dispatch`) from that branch, so the whole pipeline ran as for any release: tests, build, push, scan, a new task definition revision and a CodeDeploy blue/green deployment. `main` never contained the bad commit.
-- **What was measured.** A request to `/health` and `/products` about every 3 seconds from outside AWS for the whole test, a recorder of the CodeDeploy status, task sets, listener weights and target health every 20 seconds, and the CloudWatch metrics below.
+- **What was measured.** A request to `/health` and `/products` about every 3 seconds from outside AWS, a recorder of the CodeDeploy status, task sets, listener weights and target health every 20 seconds, and the CloudWatch metrics below. **Data gap:** the laptop running the probe and the recorder was asleep from 03:03:56 to about 03:13:03 (the recorder's gap was 608 seconds). Nothing was sent or recorded from this machine in that window, which is also why the 2XX line in the second chart below is broken there. The AWS-side evidence (CloudWatch metrics, ECS service events, the CodeDeploy deployment record) is not affected.
 - **Baseline.** Before the test: last good deployment `d-OXODRM5LM`, one PRIMARY task set with 2 running tasks (task definition 7), the listener 100% on the blue target group, and the `latest` image digest `sha256:c3886422908a5f9b…`.
 
 ## Timeline
@@ -49,7 +49,7 @@ The GitHub run ended **red** at the step "Wait for the deployment", and the step
 
 ![ALB responses during the broken deployment](images/rollback-responses.png)
 
-*Every response through the load balancer was a 2XX. There are no 5XX from the application and none from the load balancer.*
+*Every response through the load balancer was a 2XX. There are no 5XX from the application and none from the load balancer. The line is broken from about 03:03 to 03:13 because no requests were sent in that window (the machine running the probe was asleep); the 5XX series has no datapoints at all.*
 
 | Metric (window 02:48 to 03:35 UTC) | Result |
 |---|---|

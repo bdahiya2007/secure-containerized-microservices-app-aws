@@ -91,6 +91,33 @@ terraform apply tfplan                          # applies exactly that plan
 - A Terraform-only change does not start the pipeline.
 - Terraform cannot validate everything. `terraform validate` accepts a dashboard body that CloudWatch then rejects, so check the apply output.
 
+## 3a. If your IP address changes
+
+The load balancer accepts port 80 only from the address in `alb_ingress_cidr` (your own public IP as a `/32`), so when your internet address changes (a new network, a router restart, a home ISP rotating addresses) **you are locked out of your own demo**, while the application keeps running normally for everyone else who is allowed.
+
+**Symptoms:** `curl` to the load balancer hangs and times out, a browser spins, and `scripts/verify-deployment.sh` fails its endpoint checks. Nothing is wrong with the service itself (check with `aws ecs describe-services`).
+
+**Fix:**
+1. Find your new address: `curl -s https://checkip.amazonaws.com`
+2. Put it in the **git-ignored** file `terraform/demo.auto.tfvars` (never in a tracked file):
+   ```hcl
+   alb_ingress_cidr = "<your new address>/32"
+   ```
+3. Review and apply (expect **1 to change**: the load balancer's security group rule, updated in place; no restart and no downtime):
+   ```bash
+   cd terraform
+   terraform plan
+   terraform apply
+   ```
+4. Update the private block list so the secret scanner protects the new address too (and, if you like, remove the old one): `~/.config/secret-scan/literals`, one value per line. That file is local only and readable only by you.
+5. Check: `curl -s -o /dev/null -w "%{http_code}\n" http://<load balancer DNS name>/health` returns 200.
+
+**Do not** paste your address into the README, the docs, a pull request, an issue or a commit message; use a placeholder such as `<your address>/32`. The scanner blocks the address in commits only if it is on the private block list.
+
+**Do not** edit the security group by hand in the console or with the AWS CLI as a permanent fix: Terraform would show it as drift and change it back on the next apply. A one-off CLI edit is fine to get back in quickly, as long as you then make the same change in `demo.auto.tfvars` and apply.
+
+If you must reach the service from several places or from a network whose address keeps changing, the options are a wider CIDR you trust (such as your office or VPN range), or opening the load balancer to the internet with `allow_public_alb = true`. The second is a real security decision, because the API has no authentication yet (see the README's known limitations).
+
 ## 4. Verify
 
 ### Automated: 35 read-only checks
@@ -181,7 +208,7 @@ Common causes: the app cannot reach the database (check `DB_*` settings and secu
 | `Error acquiring the state lock` | Another run holds the lock, or an earlier run was interrupted | Wait; if you are sure nothing else is running, `terraform force-unlock <id>` |
 | `Backend initialization required` | Not initialised with the backend config | `terraform init -backend-config=backend.hcl` |
 | `update-service --force-new-deployment` fails | Not supported when CodeDeploy controls the service | To restart tasks, stop them (`aws ecs stop-task`, ECS replaces them) or run the Deploy workflow |
-| `curl` to the ALB hangs | Your public IP changed; the load balancer allows only `alb_ingress_cidr` | Update `alb_ingress_cidr` in `demo.auto.tfvars` and apply |
+| `curl` to the ALB hangs | Your public IP changed; the load balancer allows only `alb_ingress_cidr` (steps in [section 3a](#3a-if-your-ip-address-changes)) | Update `alb_ingress_cidr` in `demo.auto.tfvars` and apply |
 | `/products` returns 500 with `password authentication failed`, or `/health` is 503 with `AccessDeniedException` for `GetSecretValue` | The database password was rotated (the app retries once with a fresh copy), or the task role cannot read the secret | See [Secrets.md](Secrets.md#debug); check `aws iam get-role-policy --role-name product-service-task --policy-name read-db-secret` |
 | The service is healthy (tasks running, targets healthy) but every request returns 503 | The load balancer listener points at the empty target group: a CodeDeploy deployment leaves it on blue or green, and a service created by Terraform always uses blue | `aws elbv2 describe-listeners` and `describe-target-health` to confirm, then `aws elbv2 modify-listener --listener-arn <listener> --default-actions Type=forward,TargetGroupArn=<the group with healthy targets>`; see [Fargate_Spot.md](Fargate_Spot.md#test-2-fargate_base--2-the-zone-fix) |
 | `CannotPullContainerError ... failed to resolve ref` on a recreated service | The `:latest` image tag does not exist in ECR (the deploy workflow keeps it up to date) | `aws ecr describe-images --repository-name product-service --image-ids imageTag=latest`; if missing, re-tag the newest image with `aws ecr put-image` |

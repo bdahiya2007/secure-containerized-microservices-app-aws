@@ -163,6 +163,8 @@ flowchart LR
 
 ## Usage
 
+**If your IP address changes** you lose access to the load balancer until you update this value and apply: see [docs/Deployment.md](../docs/Deployment.md#3a-if-your-ip-address-changes).
+
 **Keep your settings in an untracked file.** Put `alb_ingress_cidr` (your address as a `/32`) and any `enable_*` switches in `terraform/demo.auto.tfvars`, which Terraform loads automatically and `.gitignore` excludes (`*.tfvars`).
 `alb_ingress_cidr` has **no default**, so a plan made without it stops with an error ("No value for required variable") instead of silently opening the load balancer, and `0.0.0.0/0` is refused unless you also set `allow_public_alb = true`. (Before this safeguard, a plan without the settings file fell back to an open default and was applied during the AWS test.)
 A `-var` option still applies to one run only, so keep the `enable_*` switches in the file too. Still read every plan and confirm `aws_security_group.alb` isn't changing in a way you didn't intend.
