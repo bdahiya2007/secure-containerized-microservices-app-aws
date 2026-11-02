@@ -236,4 +236,6 @@ terraform -chdir=terraform destroy
 terraform -chdir=terraform/bootstrap destroy    # the deploy role
 ```
 
+The destroy takes about 10 to 15 minutes (RDS about 7). Use a saved plan (`plan -destroy -out=destroy.tfplan`, then `apply destroy.tfplan`) so exactly what you reviewed is deleted, and delete that file afterwards (it holds your address and account details). The destroy removes your DNS record and certificate for the app name but only *reads* the hosted zone, so your other records stay. If it stops with `ResourceInUse` on the green target group (CodeDeploy points the listener at it and Terraform cannot see that; found on 2026-11-02, since fixed by making the listeners depend on it), plan and apply the destroy again: it continues where it stopped.
+
 Check afterwards that no NAT gateway, load balancer or RDS instance is left, and delete the images in ECR and the log buckets if they are not removed. The state object stays in the shared bucket. Details in [runbook.md](runbook.md#10-tear-down).
