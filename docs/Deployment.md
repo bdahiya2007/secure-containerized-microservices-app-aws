@@ -67,7 +67,7 @@ aws ecs describe-services --cluster $CLUSTER --services $SERVICE \
   --query 'services[0].[runningCount,taskSets[].[status,stabilityStatus,runningCount]]' --output text
 ```
 
-In the console: CodeDeploy, Deployments, the latest one shows a traffic shifting progress bar. EC2, Load Balancers, `product-service-alb`, Listeners and rules, HTTP:80 shows the weights.
+In the console: CodeDeploy, Deployments, the latest one shows a traffic shifting progress bar. EC2, Load Balancers, `product-service-alb`, Listeners and rules, the HTTPS:443 listener shows the weights (HTTP:80 only redirects).
 
 `blue` is `product-service-tg` and `green` is `product-service-tg-green`. They swap roles on every deployment.
 
@@ -93,7 +93,7 @@ terraform apply tfplan                          # applies exactly that plan
 
 ## 3a. If your IP address changes
 
-The load balancer accepts port 80 only from the address in `alb_ingress_cidr` (your own public IP as a `/32`), so when your internet address changes (a new network, a router restart, a home ISP rotating addresses) **you are locked out of your own demo**, while the application keeps running normally for everyone else who is allowed.
+The load balancer accepts ports 443 and 80 (80 only redirects to HTTPS) only from the address in `alb_ingress_cidr` (your own public IP as a `/32`), so when your internet address changes (a new network, a router restart, a home ISP rotating addresses) **you are locked out of your own demo**, while the application keeps running normally for everyone else who is allowed.
 
 **Symptoms:** `curl` to the load balancer hangs and times out, a browser spins, and `scripts/verify-deployment.sh` fails its endpoint checks. Nothing is wrong with the service itself (check with `aws ecs describe-services`).
 
@@ -148,7 +148,7 @@ aws ecs describe-services --cluster $CLUSTER --services $SERVICE --query 'servic
 terraform -chdir=terraform plan                                             # "No changes"
 ```
 
-The load balancer accepts port 80 only from the address in `alb_ingress_cidr`. If `curl` hangs, your public IP has probably changed (see section 6).
+The load balancer accepts ports 443 and 80 (80 only redirects to HTTPS) only from the address in `alb_ingress_cidr`. If `curl` hangs, your public IP has probably changed (see section 6).
 
 ## 5. Roll back
 

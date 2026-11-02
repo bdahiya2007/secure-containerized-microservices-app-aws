@@ -1,6 +1,6 @@
 # HTTPS and a custom domain (Route 53 + ACM)
 
-The load balancer serves plain HTTP on its own address by default. With `enable_https = true` the app is served at a name in a Route 53 hosted zone you already own, over HTTPS, and port 80 redirects to it. **Written, not yet applied: the first apply and its results will be recorded here.**
+The load balancer serves plain HTTP on its own address by default. With `enable_https = true` the app is served at a name in a Route 53 hosted zone you already own, over HTTPS, and port 80 redirects to it. **Applied and verified on the live stack on 2026-11-01** (results at the end).
 
 ## What it adds
 
@@ -57,3 +57,20 @@ While it is open: anyone can call `GET /products`, load can scale tasks up and r
 - **The ALB's own DNS name no longer matches the certificate.** Use `app_domain`; `curl -k` only for debugging.
 - **Route 53 health checks** cannot reach an ALB that admits only one address; use a CloudWatch-alarm health check if that is needed later.
 - **HTTP-only scanner exceptions** in `.checkov.yaml` stay, because the default (switch off) code still has an HTTP-only listener.
+
+## Result of the first apply (2026-11-01)
+
+The plan was 6 to add, 2 to change, 0 to destroy (the certificate and its validation record, the 443 listener and the redirect rule, the alias record, a 443 rule on the ALB security group, and the CodeDeploy deployment group switching to the 443 listener). The first plan wrongly replaced the ALB security group because a description had been reworded (AWS cannot change it in place); that was fixed before the apply.
+
+| Check | Result |
+|---|---|
+| DNS | The name resolves to the load balancer (alias record) |
+| Certificate | Valid Amazon certificate for the name, valid until 2027-05-18; verified by curl |
+| `http://` | 301 to `https://` (a redirect followed ends at a 200) |
+| `GET /health`, `GET /products` over HTTPS | 200 with `{"status":"ok"}` and the product data |
+| `GET /nope` over HTTPS | 404 |
+| TLS | TLS 1.3; TLS 1.1 refused |
+| ALB's own address over HTTPS | Fails certificate verification, as designed |
+| `verify-deployment.sh --skip-plan` | 34 passed, 0 failed, 1 skipped (the drift check); its endpoint checks run over HTTPS |
+
+**What happened with the live target group:** CodeDeploy had left traffic on the green target group, so the new 443 listener (which starts on blue) answered 503. One `aws elbv2 modify-listener` pointed it at green, and about a minute later (the change takes a little while to apply) HTTPS answered 200. This is the step 3 above; check the live group first, as written.
