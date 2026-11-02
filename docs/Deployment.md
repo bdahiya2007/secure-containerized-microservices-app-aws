@@ -127,15 +127,16 @@ If you must reach the service from several places or from a network whose addres
 ./scripts/verify-deployment.sh --skip-plan  # faster; skips the drift check
 ```
 
-It takes a couple of minutes. Expect `33 passed, 0 failed, 2 skipped` with `--skip-plan` (the skipped ones are the drift check and, while Spot is off, the Fargate Spot check). Run it when no deployment is in progress.
+It takes a couple of minutes. Expect `34 passed, 0 failed, 1 skipped` with `--skip-plan` and Spot on (the skipped one is the drift check; with Spot off it is `33 passed, 0 failed, 2 skipped`, because the Fargate Spot check is skipped too). With HTTPS on, the endpoint checks run against the HTTPS name (`app_url`). Run it when no deployment is in progress.
 
 ### By hand
 
 ```bash
-ALB=$(terraform -chdir=terraform output -raw alb_dns_name)
-curl -s -o /dev/null -w "health   %{http_code}\n" http://$ALB/health      # 200
-curl -s http://$ALB/products | head -c 300; echo                          # JSON array of 3 products
-curl -s -o /dev/null -w "missing  %{http_code}\n" http://$ALB/nope        # 404
+# app_url is https://<your name> with enable_https, otherwise the load balancer's own http:// address
+URL=$(terraform -chdir=terraform output -raw app_url)
+curl -s -o /dev/null -w "health   %{http_code}\n" $URL/health      # 200
+curl -s $URL/products | head -c 300; echo                           # JSON array of 3 products
+curl -s -o /dev/null -w "missing  %{http_code}\n" $URL/nope        # 404
 
 # which image is running
 aws ecs describe-task-definition --task-definition $PROJECT \

@@ -141,7 +141,7 @@ Then check `/products` (section 3). If you change `schema.sql`, `terraform apply
 Pass `--skip-plan` to leave out the Terraform drift check. It changes nothing in AWS. Run it after every deploy; the manual commands below show what it checks. If the targets or the log check fail right after a scale-in or a redeploy, wait a minute and run it again (it already retries those). It sends no traffic that changes data; successful `/health` checks are not logged, so a log check on a quiet service may need a few requests first.
 
 ```bash
-URL=http://$(terraform -chdir=terraform output -raw alb_dns_name)
+URL=$(terraform -chdir=terraform output -raw app_url)   # https://<your name> with enable_https, else http://<alb address>
 
 curl --silent --show-error --include "$URL/health"     # expect 200 {"status":"ok"}
 curl --silent --show-error --include "$URL/products"   # expect 200 and a JSON array
@@ -243,9 +243,9 @@ only until the next scaling decision, and it can't go outside the minimum and ma
 **Test scaling** (this adds tasks, which cost about $0.012 an hour each). To make it react to a small test, apply with a low request target, then send traffic from the machine the ALB allows:
 ```bash
 terraform -chdir=terraform apply -var="alb_ingress_cidr=<your-ip>/32" -var="autoscaling_requests_per_target=20"
-ALB=$(terraform -chdir=terraform output -raw alb_dns_name)
+URL=$(terraform -chdir=terraform output -raw app_url)
 end=$((SECONDS+300))
-while [ $SECONDS -lt $end ]; do seq 1 600 | xargs -P 30 -I{} curl -s -o /dev/null "http://$ALB/health"; done
+while [ $SECONDS -lt $end ]; do seq 1 600 | xargs -P 30 -I{} curl -s -o /dev/null "$URL/health"; done
 ```
 The traffic must last **at least 5 minutes**: the scale-out alarm needs three consecutive minutes above the target, so a shorter burst never triggers it (a 6,000-request burst that lasted two minutes did not).
 Watch `running` rise toward 4 with the `describe-services` command above. In the AWS test the alarm fired about five minutes after the traffic started, and four tasks were running about a minute later.
