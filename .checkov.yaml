@@ -10,8 +10,9 @@ compact: true
 skip-path:
   - .terraform
 skip-check:
-  # HTTP only: the ALB listens on port 80 with no TLS. HTTPS needs a domain name and an ACM
-  # certificate, which this project does not have. Add them together with the redirect for production.
+  # HTTP only by default: with enable_https off the ALB listens on port 80 with no TLS. HTTPS (an ACM certificate, a 443
+  # listener and a redirect) is available behind enable_https (docs/HTTPS_and_Domain.md); the port-80 listener keeps these
+  # findings because the default code path still has it as the only listener.
   - CKV_AWS_2
   - CKV_AWS_103
   - CKV_AWS_378

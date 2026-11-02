@@ -170,3 +170,31 @@ variable "fargate_spot_weight" {
     error_message = "fargate_weight and fargate_spot_weight cannot both be 0: ECS rejects a strategy whose weights are all zero."
   }
 }
+
+variable "enable_https" {
+  description = "Serve the app over HTTPS at app_domain: an ACM certificate (validated in the Route 53 zone), an HTTPS listener on 443 that CodeDeploy uses, an HTTP redirect, and a Route 53 alias record. Off by default. See docs/HTTPS_and_Domain.md."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_https || (var.app_domain != "" && var.hosted_zone_name != "")
+    error_message = "enable_https needs app_domain (for example products.example.com) and hosted_zone_name (for example example.com)."
+  }
+}
+
+variable "app_domain" {
+  description = "Full name the app is served on when enable_https is true (for example products.example.com). Keep the real value in the untracked terraform/demo.auto.tfvars."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.app_domain == "" || endswith(var.app_domain, ".${var.hosted_zone_name}")
+    error_message = "app_domain must be a name inside hosted_zone_name (for example products.example.com in example.com)."
+  }
+}
+
+variable "hosted_zone_name" {
+  description = "Existing public Route 53 hosted zone that holds app_domain (for example example.com). It is only read: this stack adds records for app_domain and the certificate validation, and never changes the zone itself or other records."
+  type        = string
+  default     = ""
+}

@@ -55,3 +55,8 @@ output "codedeploy_deployment_group_name" {
   description = "CodeDeploy deployment group (empty unless enable_blue_green)"
   value       = one(aws_codedeploy_deployment_group.app[*].deployment_group_name)
 }
+
+output "app_url" {
+  description = "Where the app is served: https://app_domain with enable_https, otherwise the load balancer's own HTTP address"
+  value       = var.enable_https ? "https://${var.app_domain}" : "http://${aws_lb.app.dns_name}"
+}

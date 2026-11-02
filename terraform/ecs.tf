@@ -192,7 +192,7 @@ resource "aws_ecs_service" "app" {
     container_port   = 3000
   }
 
-  depends_on = [aws_lb_listener.http, aws_ecs_cluster_capacity_providers.main]
+  depends_on = [aws_lb_listener.http, aws_lb_listener.https, aws_ecs_cluster_capacity_providers.main]
 
   # Auto Scaling (autoscaling.tf) changes the desired count, so Terraform must not reset it
   lifecycle {
@@ -249,7 +249,7 @@ resource "aws_lb_target_group" "app" {
   }
 }
 
-# HTTP only for the demo; add an ACM cert and HTTPS listener for production.
+# Port 80. Without enable_https this is the only listener and the one CodeDeploy shifts traffic on.
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.app.arn
   port              = 80
@@ -271,5 +271,51 @@ resource "aws_lb_listener" "http" {
   lifecycle {
     ignore_changes       = [default_action]
     replace_triggered_by = [terraform_data.capacity_strategy]
+  }
+}
+
+# HTTPS (enable_https). This listener becomes the one CodeDeploy shifts traffic on (see codedeploy.tf), so it has the same
+# lifecycle rules as the HTTP listener above. Port 80 then only redirects.
+resource "aws_lb_listener" "https" {
+  count = var.enable_https ? 1 : 0
+
+  load_balancer_arn = aws_lb.app.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = aws_acm_certificate_validation.app[0].certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+
+  lifecycle {
+    ignore_changes       = [default_action]
+    replace_triggered_by = [terraform_data.capacity_strategy]
+  }
+}
+
+# A rule is evaluated before the listener's default action, so every request on port 80 is redirected to HTTPS
+# whichever target group the HTTP listener's default action points at after a deployment.
+resource "aws_lb_listener_rule" "http_redirect" {
+  count = var.enable_https ? 1 : 0
+
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 1
+
+  action {
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+
+  condition {
+    path_pattern {
+      values = ["/*"]
+    }
   }
 }
