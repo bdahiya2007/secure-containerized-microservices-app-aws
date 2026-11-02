@@ -28,8 +28,9 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
 
 locals {
   # The service's capacity provider strategy when enable_fargate_spot is on. ECS places the first fargate_base tasks on
-  # on-demand Fargate (they survive a Spot interruption), then splits the rest by weight. With the defaults (base 1,
-  # weights 1 and 3) a service of 2 tasks runs 1 on-demand and 1 Spot; at 4 tasks, 2 and 2 or 1 and 3.
+  # on-demand Fargate (they survive a Spot interruption), then splits the rest by weight. With the defaults (base 2,
+  # weights 1 and 3) a service of 2 tasks runs 2 on-demand tasks, which ECS spreads over two Availability Zones; the
+  # third and fourth tasks of a scale-out are mostly Spot.
   capacity_provider_strategy = [
     { name = "FARGATE", base = var.fargate_base, weight = var.fargate_weight },
     { name = "FARGATE_SPOT", base = 0, weight = var.fargate_spot_weight },
@@ -261,7 +262,14 @@ resource "aws_lb_listener" "http" {
 
   # With enable_blue_green, CodeDeploy moves this action between the blue and green target groups on
   # every deployment, so Terraform must not move it back. Its only job here is the initial value.
+  # A CodeDeploy deployment leaves this on whichever target group it last used, but a service that Terraform creates
+  # always registers its tasks in the blue group (aws_lb_target_group.app). Without this, replacing the service (switching
+  # Fargate Spot or its base on, say) can leave the listener on the empty green group and every request returns 503
+  # (found in the Fargate Spot test: about 8 extra minutes of outage). So when the service is replaced, the listener is
+  # replaced with it, and a new listener starts on blue. Only needed when enable_blue_green is on; the marker changes
+  # exactly when the blue/green service is replaced.
   lifecycle {
-    ignore_changes = [default_action]
+    ignore_changes       = [default_action]
+    replace_triggered_by = [terraform_data.capacity_strategy]
   }
 }

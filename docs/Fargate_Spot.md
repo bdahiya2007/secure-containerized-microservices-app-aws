@@ -2,7 +2,7 @@
 
 The service can run on a **mix of on-demand Fargate and Fargate Spot** to lower the compute bill without giving up availability. It is controlled by one Terraform switch, `enable_fargate_spot`, which is **off by default**. This page explains the design, how to turn it on, how to check it, and what can go wrong. The general EC2/Fargate comparison is in [EC2_vs_Fargate.md](EC2_vs_Fargate.md).
 
-> **Status (2026-11-02): enabled and tested live once; one high-availability gap found and open.** The service ran on one `FARGATE` and one `FARGATE_SPOT` task. Stopping the Spot task cost **no failed requests**, but both tasks sat in the **same Availability Zone**, so a zone failure would take the service down. See [Live test](#live-test-2026-11-02). Enabling it also exposed a missing-image problem, now fixed in the pipeline.
+> **Status (2026-11-02): enabled and tested live, with `fargate_base = 2`.** Two live tests found three problems, all fixed or closed: the `:latest` image had expired from ECR, the load balancer listener can be left pointing at the empty target group when the service is replaced, and with one task per provider both tasks landed in the same Availability Zone. With base 2 the two on-demand tasks were placed in different zones. Stopping a Spot task cost no failed requests. See [Live tests](#live-tests-2026-11-02).
 
 ## What Fargate Spot is
 
@@ -33,25 +33,25 @@ flowchart LR
 
 ### Defaults and what they give you
 
-`fargate_base = 1`, `fargate_weight = 1`, `fargate_spot_weight = 3`. ECS fills the base first, then splits the rest 1 : 3.
+`fargate_base = 2`, `fargate_weight = 1`, `fargate_spot_weight = 3`. ECS fills the base first, then splits the rest 1 : 3.
 
 | Running tasks | On-demand `FARGATE` | `FARGATE_SPOT` |
 |---|---|---|
-| 2 (the minimum) | 1 | 1 |
-| 3 | 1 or 2 | 2 or 1 |
-| 4 (the maximum) | 1 to 2 | 2 to 3 |
+| 2 (the minimum) | 2 | 0 |
+| 3 | 2 | 1 |
+| 4 (the maximum) | 2 to 3 | 1 to 2 |
 
-ECS rounds each split, so the exact counts at 3 and 4 tasks vary. The base task is always on-demand.
+ECS rounds each split, so the exact counts at 4 tasks vary. The two base tasks are always on-demand. At the two-task baseline nothing runs on Spot; Spot is used only when Auto Scaling adds tasks.
 
-### Why base 1 and a 1 : 3 split
+### Why base 2 and a 1 : 3 split
 
-- **High availability needs a floor that cannot be reclaimed.** The base task is on-demand, so a Spot interruption can remove at most the Spot tasks; the service never drops to zero. `fargate_base` is validated to be at least 1.
-- **Tasks are spread over two Availability Zones** (they were already, and `verify-deployment.sh` checks it), so one zone's Spot shortage does not take out both.
-- **The 1 : 3 weight favours Spot above the base** because that is where the saving is. Raise `fargate_weight` or `fargate_base` for more safety, lower them for more saving.
+- **High availability needs a floor that cannot be reclaimed.** The base tasks are on-demand, so a Spot interruption can remove at most the Spot tasks; the service never drops below its base. `fargate_base` is validated to be at least 1.
+- **The base is 2, not 1, for zone resilience.** With a base of 1 the service had one on-demand and one Spot task, and in four placements in a row both landed in the same Availability Zone. ECS seems to spread tasks across zones within one capacity provider, so two on-demand tasks are placed in different zones (tested: one in `us-east-1a`, one in `us-east-1b`), where one task per provider was not. A zone failure then costs one of the two base tasks, not both. `verify-deployment.sh` checks that tasks run in at least two zones.
+- **The 1 : 3 weight favours Spot above the base** because that is where the saving is (the third and fourth tasks of a scale-out). Raise `fargate_weight` or `fargate_base` for more safety, lower them for more saving.
 
 ## What it saves in this project
 
-Roughly: one 0.25 vCPU, 512 MB task costs about $0.012 an hour on-demand, so moving one task of two to Spot saves on the order of $0.009 an hour, about **$6 a month**. The whole stack costs about $0.16 to $0.20 an hour, dominated by the NAT gateway, load balancer and database. So the saving here is small; the value is the pattern, and it grows with the number of tasks. Prices vary and are approximate; check the current Fargate pricing page.
+Almost nothing at the baseline. One 0.25 vCPU, 512 MB task costs about $0.012 an hour on-demand, and a Spot task saves on the order of $0.009 an hour. With the default base of 2 and a minimum of 2 tasks, **no task runs on Spot at the baseline**; Spot appears only when Auto Scaling adds a third or fourth task, so the saving is at most about two Spot tasks while the service is scaled out (a few cents an hour, and only during load). The whole stack costs about $0.16 to $0.20 an hour, dominated by the NAT gateway, load balancer and database. The value is the pattern and the tested high availability, not the saving. With a base of 1 the saving was about $6 a month, but that setting was not zone-resilient. Prices vary and are approximate; check the current Fargate pricing page.
 
 ## High availability: what can go wrong
 
@@ -128,20 +128,32 @@ AWS documents the stop code as `SpotInterruption` in some places and `Terminatio
 
 You cannot trigger a real Spot interruption on demand. To test how the service copes with losing a task, stop one by hand (`aws ecs stop-task`) and watch ECS replace it and the target group recover. That tests recovery and the on-demand floor, not the two-minute warning.
 
-## Live test (2026-11-02)
+## Live tests (2026-11-02)
 
-Enabled with `terraform apply -var enable_fargate_spot=true -replace='aws_ecs_service.blue_green[0]'` on the running stack, with a request every 2 seconds recording availability.
+Two tests on the running stack, each with a request every 2 seconds recording availability.
+
+### Test 1: enable Spot with base 1, then stop a Spot task
 
 | What | Result |
 |---|---|
-| The strategy | `FARGATE` (base 1, weight 1) and `FARGATE_SPOT` (weight 3); the two tasks ran one on each provider |
-| Outage while replacing the service | About 9.5 minutes (00:42 to 00:52 UTC). About 7 of them were the missing `:latest` image (below); without it, expect about 3 to 4 minutes (old service deleted, new tasks started) |
+| The strategy | `FARGATE` (base 1, weight 1) and `FARGATE_SPOT` (weight 3); one task on each provider |
+| Outage while replacing the service | About 9.5 minutes (00:42 to 00:52 UTC). About 7 of them were the missing `:latest` image (below) |
 | Stopping the Spot task by hand | **41 of 41 requests returned 200** (`/health` and `/products`). The on-demand task served alone; ECS noticed in about 33 seconds, started a replacement on Spot, and it was running about 85 seconds after the stop |
-| **Zone spread** | **Both tasks were in `us-east-1b`, three times running** (the first placement, 14 minutes of waiting for ECS to rebalance, and the Spot replacement). Zone rebalancing was `ENABLED` and did nothing |
+| Zone spread | **Both tasks in the same zone, four placements in a row** (twice in `us-east-1b`, then `us-east-1a` after a deployment). Zone rebalancing was `ENABLED` and did nothing in 14 minutes |
 
-**The missing image.** The new service started from Terraform's task definition, which names `:latest`. That tag no longer existed: the ECR rule "keep the last 10 images" had expired it, because the pipeline pushes only commit-SHA tags. Tasks failed with `CannotPullContainerError ... failed to resolve ref`. The tag was re-created by hand on the running image (a few seconds, and the tasks started within a minute), and the deploy workflow now moves `:latest` to every successfully deployed image so it cannot happen again.
+**The missing image.** The new service started from Terraform's task definition, which names `:latest`. That tag no longer existed: the ECR rule "keep the last 10 images" had expired it, because the pipeline pushes only commit-SHA tags. Tasks failed with `CannotPullContainerError ... failed to resolve ref`. The tag was re-created by hand, and the deploy workflow now moves `:latest` to every successfully deployed image.
 
-**The zone gap.** My explanation, not proven: ECS spreads tasks across zones within a capacity provider, and with one task per provider each is placed on its own, so both can land in one zone. This means the default (`fargate_base = 1`) survives a Spot reclaim, which was tested, but **not** the loss of a zone. Options: keep it and accept the risk; set `fargate_base = 2` so two on-demand tasks (one provider, which can spread them) are always running, with Spot only above two tasks (no saving at the two-task baseline, and the zone spread is untested); or turn Spot off. Changing the base replaces the service again.
+### Test 2: `fargate_base = 2` (the zone fix)
+
+| What | Result |
+|---|---|
+| The strategy | `FARGATE` (base 2, weight 1) and `FARGATE_SPOT` (weight 3); two on-demand tasks, no Spot at two tasks |
+| Zone spread | **One task in `us-east-1a`, one in `us-east-1b`** |
+| Outage while replacing the service | About 11 minutes (01:36 to 01:47 UTC). About 3 were the normal replacement; **about 8 were the listener problem below** |
+
+**The listener left on the empty group.** A CodeDeploy deployment moves the load balancer listener between the blue and green target groups, and the last one had left it on green. A service that Terraform creates always registers its tasks in the blue group. After the replacement both tasks were healthy in blue, while the listener sent 100% of traffic to green, which was empty, so every request returned 503. Pointing the listener back at blue (`aws elbv2 modify-listener --default-actions Type=forward,TargetGroupArn=<the blue group>`) restored service within seconds. The first replacement (test 1) worked only because the listener happened to be on blue then. Terraform now replaces the listener together with the service (`replace_triggered_by` in `terraform/ecs.tf`), so a replaced service starts with a listener on blue. That change is planned and validated but **has not been exercised by a real replacement yet**; if a replacement leaves you with 503s, check `aws elbv2 describe-listeners` first.
+
+**Still not seen:** a real Spot reclaim and its two-minute warning, and scale-out onto Spot.
 
 ## Limits and next steps
 
