@@ -156,7 +156,24 @@ Run on 2026-11-01 against the deployed fix (task definition revision 9), same me
 | Burst of 60 requests, 30 at a time | not run | **60 × 200** |
 | App log | refresh and retries, plus `Failed to fetch products` errors | 2 credential loads (one per task) and 9 `retrying with the current secret` warnings, no errors |
 
-So the retries that used to be lost now all recover. The rotation took about 70 seconds again. This covers a burst of up to 30 parallel requests against 2 tasks right after a rotation; it does not cover sustained heavy load or a rotation during a deployment.
+So the retries that used to be lost now all recover. The rotation took about 70 seconds again. This covers a burst of up to 30 parallel requests against 2 tasks right after a rotation. A rotation under sustained load is below; a rotation during a deployment is not yet tested.
+
+### Rotation under sustained load
+
+Run on 2026-11-02: 20 workers sent `GET /products` as fast as they could (about 86 requests a second, 5,448 in the peak minute) and a rotation was forced in the middle of it (`modify-db-instance --rotate-master-user-password`, requested 03:35:06 UTC, complete 03:36:22, 76 seconds). The service started at 2 tasks, and **Auto Scaling added 2 more at 03:35:06, in the middle of the rotation**, so new tasks started and read the new secret while the others retried.
+
+![Requests, 5XX and unhealthy hosts across the rotation](images/rotation-under-load.png)
+
+| | Result |
+|---|---|
+| Requests in the valid window (03:30:06 to 03:36:37, 391 seconds) | 33,755: **33,754 returned 200 and 1 returned 500** (0.003%) |
+| CloudWatch | 1 target 5XX (at 03:35), 0 load-balancer 5XX, **0 unhealthy hosts** in any minute |
+| App log | 13 `retrying with the current secret` warnings, 7 credential loads, 1 failed request, 2 `Database unavailable` health-state logs (no target was marked unhealthy) |
+| Scaling | 2 to 4 tasks during the rotation; the new tasks started and served without errors |
+
+The one failed request is the window described in the limits below: a request that reaches the database in the moment RDS has changed the password but the retry has not yet fetched the new one. Everything else recovered by retrying once.
+
+**What the run did not cover.** It was planned as 15 minutes of load but the machine running the load generator went to sleep at 03:36:37 for about 29 minutes (the 20 `000` results at that second are the suspended client, not the service, and were left out of the counts). So the valid window is 6.5 minutes, 75 seconds of it after the rotation finished.
 
 **What this says about the original design:** a plain rotation is harmless for a service with a steady trickle of requests, because open connections keep working. The risk is the moment the pool needs a new connection (a burst of traffic, an idle connection timing out, a database restart or failover) while the cached password is stale. That is what the retry covers.
 
@@ -182,8 +199,8 @@ So the retries that used to be lost now all recover. The rotation took about 70 
 
 ## Limits and next steps
 
-- **Not deployed or tested in AWS yet.** The first rollout may need fixes, and the rotation behaviour needs the real test above.
-- **The retry covers one failed login per request.** A request that arrives in the brief window while RDS changes the password can still fail once; the next request recovers. In the live test after the fix no request failed, but that is two bursts, not a guarantee.
+- **Tested live, with limits.** Three forced rotations (a burst test that found a retry race, a re-test after the fix, and one under sustained load), and the scheduled 7-day rotation has not yet run with this code. Not tested: a rotation during a deployment.
+- **The retry covers one failed login per request.** A request that arrives in the brief window while RDS changes the password can still fail once; the next request recovers. In the live tests after the fix, 100 of 100 burst requests and 33,754 of 33,755 requests under sustained load succeeded; the one failure is the window described here, so assume a rotation can cost one request in a busy service.
 - **No VPC endpoint for Secrets Manager.** Calls go out through the NAT gateway. An interface endpoint would keep the traffic inside the VPC and costs about $0.01 an hour per endpoint per zone.
 - **No resource policy on the secret.** Access is controlled by IAM only. A policy that denies everyone but the task role (and administrators) would be a second lock.
 - **The username is read from the secret once per task start.** RDS does not change the master username, so this is enough.

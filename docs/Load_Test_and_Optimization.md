@@ -47,6 +47,10 @@ What this shows:
 - **No request failed during any of it.**
 - **Only the request-based policy fired on the way up.** The CPU policy never needed to: 56 requests a second used about 8% of the CPU. The new metric-math request policy (see below) was therefore the one exercised against real traffic.
 
+### A second run: a rotation under load
+
+The same day a second, heavier run (20 workers, about 86 requests a second, 5,448 requests in the peak minute) was combined with a forced database password rotation. 33,754 of 33,755 requests returned 200, and Auto Scaling added tasks in the middle of the rotation. Details and the chart are in [Secrets.md](Secrets.md#rotation-under-sustained-load). It was planned as 15 minutes, but the load generator's machine went to sleep after 6.5 minutes, so this run does **not** replace a longer test: the longest clean runs so far are 8 minutes (33,600 requests) and 6.5 minutes (33,755 requests), all without a 5XX apart from the one rotation-window failure.
+
 ### What the test does not show
 
 - **A client on a laptop** produced the load, from about 250 ms away; the rate (56 requests a second) was limited by the client, not the service. The service had a lot of headroom (CPU 8%).
