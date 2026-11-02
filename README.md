@@ -239,8 +239,9 @@ terraform -chdir=terraform plan -out=full.tfplan
 terraform -chdir=terraform apply full.tfplan
 
 # 4. Try it
-curl "http://$(terraform -chdir=terraform output -raw alb_dns_name)/health"
-curl "http://$(terraform -chdir=terraform output -raw alb_dns_name)/products"
+# app_url is the HTTPS name with enable_https, otherwise the load balancer's own http:// address
+curl "$(terraform -chdir=terraform output -raw app_url)/health"
+curl "$(terraform -chdir=terraform output -raw app_url)/products"
 ```
 
 `/products` returns `500` until `db/schema.sql` is loaded into the private database. Run the one-off migration task defined in `terraform/migrate.tf` (`aws ecs run-task`, no `psql` or bastion

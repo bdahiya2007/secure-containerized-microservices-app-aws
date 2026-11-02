@@ -75,8 +75,8 @@ Expect `access_logs.s3.enabled` = `true`, with the central bucket name and prefi
 
 ```bash
 # 2. Generate some traffic (the load balancer only logs requests that reach it)
-ALB=$(terraform -chdir=terraform output -raw alb_dns_name)
-for i in $(seq 1 20); do curl -s -o /dev/null "http://$ALB/health"; curl -s -o /dev/null "http://$ALB/products"; curl -s -o /dev/null "http://$ALB/nope"; done
+URL=$(terraform -chdir=terraform output -raw app_url)
+for i in $(seq 1 20); do curl -s -o /dev/null "$URL/health"; curl -s -o /dev/null "$URL/products"; curl -s -o /dev/null "$URL/nope"; done
 
 # 3. Wait about 5 minutes, then list the files
 aws s3 ls "s3://$BUCKET/alb/" --recursive --region "$AWS_REGION" | tail -5

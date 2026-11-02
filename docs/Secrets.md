@@ -112,7 +112,7 @@ aws iam get-role-policy --role-name product-service-task --policy-name read-db-s
 aws logs tail /ecs/product-service --since 15m --filter-pattern '"Database credentials loaded"'
 
 # the service works end to end
-curl -s http://$(terraform -chdir=terraform output -raw alb_dns_name)/products | head -c 200
+curl -s $(terraform -chdir=terraform output -raw app_url)/products | head -c 200
 
 ./scripts/verify-deployment.sh --skip-plan
 ```
@@ -126,7 +126,7 @@ This forces a rotation now. Running tasks should log one `Database login failed,
 ```bash
 aws rds modify-db-instance --db-instance-identifier product-service-db --rotate-master-user-password --apply-immediately
 aws logs tail /ecs/product-service --since 10m --filter-pattern '"retrying with the current secret"'
-curl -s -o /dev/null -w "%{http_code}\n" http://$(terraform -chdir=terraform output -raw alb_dns_name)/health
+curl -s -o /dev/null -w "%{http_code}\n" $(terraform -chdir=terraform output -raw app_url)/health
 ```
 
 The unit tests cover the retry logic with fakes; only a live test shows the behaviour against real RDS and Secrets Manager. It was run once, with the result below. To exercise the retry path, send a burst of parallel requests right after the rotation (for example `seq 1 40 | xargs -P 20 -I{} curl -s -o /dev/null -w "%{http_code}\n" http://$ALB/products | sort | uniq -c`): a steady trickle of requests keeps the one open database connection busy, and an open connection stays valid after a rotation, so nothing would fail.
