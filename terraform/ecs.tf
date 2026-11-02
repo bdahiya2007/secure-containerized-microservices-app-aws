@@ -115,7 +115,9 @@ resource "aws_ecs_task_definition" "app" {
   task_role_arn      = aws_iam_role.task.arn
 
   container_definitions = jsonencode([{
-    name                   = var.project_name
+    name = var.project_name
+    # A service that Terraform creates or recreates starts from this tag. The deploy workflow moves :latest to every image that
+    # deployed successfully, so it always exists (see docs/CICD.md).
     image                  = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
     essential              = true
     readonlyRootFilesystem = true
