@@ -1,0 +1,65 @@
+name: Scheduled scan
+
+# A weekly scan of the image built from main and of the production dependencies. The pull request checks (validate.yml)
+# only run when something changes, so a new vulnerability in the base image or a dependency would otherwise stay unseen
+# until the next pull request. A failed run is emailed to the repository owner by GitHub. Fully offline from AWS: no
+# credentials are used, nothing is pushed anywhere.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Scan the image and dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write # upload the Trivy results to the Security tab
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same platform as the deployed task definition (X86_64). The base image is pulled fresh, so a new base image
+      # fix or a new base image vulnerability shows up here.
+      - name: Build the image
+        run: docker build --pull --platform linux/amd64 -t product-service:scan product-service
+
+      # Everything Trivy finds, for the Security tab. Does not fail the run.
+      - name: Scan the image (Trivy, report for the Security tab)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" aquasec/trivy:0.76.1 image \
+            --scanners vuln,secret --format sarif --output /out/trivy-image.sarif --no-progress product-service:scan
+
+      - name: Upload the results to the Security tab
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      # The gate: the same rule as the pull request check. Unfixed vulnerabilities are skipped (nothing to act on).
+      - name: Fail on HIGH or CRITICAL findings that have a fix (Trivy)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.76.1 image \
+            --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress product-service:scan
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+
+      - name: Audit production dependencies
+        working-directory: product-service
+        run: npm audit --omit=dev --audit-level=high

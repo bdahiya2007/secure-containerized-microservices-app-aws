@@ -148,6 +148,8 @@ Every pull request runs these (none needs AWS access). All must pass before merg
 | Container image | Trivy `image` (vulnerabilities and embedded secrets) and Trivy `config` (Dockerfile) | the image built from the PR, never pushed |
 | Infrastructure as code | Checkov 3.3.29 with the reviewed exceptions in `.checkov.yaml` | `terraform/` |
 
+**Also, every week** (`.github/workflows/scheduled-scan.yml`, Mondays 06:17 UTC, and on demand): the image is rebuilt from `main` with a freshly pulled base image and scanned with Trivy (full findings go to the Security tab; the run fails on HIGH or CRITICAL findings that have a fix), and the production dependencies are audited. PR checks only run when something changes, so this is what catches a new vulnerability in the base image or a dependency in between. GitHub emails the owner if a run fails.
+
 On deploy, the ECR scan-on-push result is a final gate (CRITICAL stops the deployment). Dependabot proposes weekly updates for GitHub Actions, npm packages, the Docker base images and Terraform providers; each update goes through the same checks.
 
 Trivy skips vulnerabilities that have no fixed version yet (`--ignore-unfixed`), because there is nothing to upgrade to; those still appear in the ECR scan. The scanner versions are pinned, so a new rule set arrives through a Dependabot or manual version bump, not silently. Not yet run in GitHub Actions: the first run may flag findings or need rule tuning.
