@@ -39,7 +39,7 @@ flowchart TB
   s3["Amazon S3<br/>(ECR image layers)"]
   s3ep["S3 gateway endpoint<br/>(free, in the private route table)"]
 
-  user -->|"HTTP :80 (from alb_ingress_cidr)"| igw
+  user -->|"HTTPS :443 (from alb_ingress_cidr); :80 redirects"| igw
   igw --> albA
   igw --> albB
   albA -->|":3000"| taskA
@@ -100,7 +100,7 @@ flowchart LR
 ### Known network limits
 
 - **Single NAT gateway:** if zone A fails, tasks in zone B lose outbound access (image pulls, secret reads, logs). One NAT per zone fixes this at about $0.045/hr more each.
-- **HTTP only:** the listener is on port 80 with no TLS between the client and the ALB. With `enable_https` (off by default, not yet applied) it serves HTTPS and redirects port 80; see [../docs/HTTPS_and_Domain.md](../docs/HTTPS_and_Domain.md).
+- **TLS ends at the ALB:** clients use HTTPS (ACM certificate, TLS 1.3) with `enable_https`, and port 80 only redirects; the hop from the ALB to the tasks is plain HTTP on port 3000 inside the VPC. `enable_https` is off by default in the code (it needs a domain) and on in the deployed demo; see [../docs/HTTPS_and_Domain.md](../docs/HTTPS_and_Domain.md).
 - **Single-AZ database:** a zone failure takes the database down until RDS recovers it; set `multi_az = true` for a standby.
 - **Outbound HTTPS to the whole internet:** the `app` group allows TCP 443 to `0.0.0.0/0` (and PostgreSQL to the database group, nothing else), because the targets are AWS public endpoints behind a NAT. Interface VPC endpoints for ECR, Secrets Manager and CloudWatch Logs would let you remove even that, at about $0.01 an hour per endpoint per zone.
 
@@ -158,7 +158,7 @@ flowchart LR
 | `enable_cloudtrail` | `false` | Create a multi-region CloudTrail trail (account-wide; the first trail's management events are free) |
 | `enable_s3_access_logging` | `false` | Record who reads or changes the central log bucket's files (S3 server access logs), in a separate small bucket |
 | `enable_rds_logs` | `false` | Export PostgreSQL and upgrade logs to CloudWatch Logs (14-day retention) |
-| `alb_ingress_cidr` | **none (required)** | CIDR allowed to reach the load balancer on port 80. Set it to your own address as a `/32` (in the untracked `terraform/demo.auto.tfvars`, or with `-var`; never commit your address). `0.0.0.0/0` is refused unless `allow_public_alb` is true. |
+| `alb_ingress_cidr` | **none (required)** | CIDR allowed to reach the load balancer on port 80, and on 443 with `enable_https`. Set it to your own address as a `/32` (in the untracked `terraform/demo.auto.tfvars`, or with `-var`; never commit your address). `0.0.0.0/0` is refused unless `allow_public_alb` is true. |
 | `allow_public_alb` | `false` | Set to `true` to allow `alb_ingress_cidr = "0.0.0.0/0"`, which opens the load balancer to the whole internet. Off by default, so an open load balancer is always deliberate. |
 
 ## Usage
@@ -267,7 +267,7 @@ traffic. Run `terraform destroy` when finished.
 
 ## Production hardening
 
-- HTTPS listener with an ACM certificate, and redirect HTTP to HTTPS
+- ~~HTTPS listener with an ACM certificate, and redirect HTTP to HTTPS~~ done (`enable_https`, 2026-11-01)
 - One NAT gateway per AZ
 - `multi_az = true`, `deletion_protection = true`, `skip_final_snapshot = false` on RDS
 - A dedicated state bucket per project (state is already in S3 with locking, in a shared bucket)

@@ -24,7 +24,7 @@ This document explains each AWS service, and how the **principle of least privil
 
 ```mermaid
 flowchart TB
-  user(["User or client<br/>HTTP :80, only from alb_ingress_cidr"])
+  user(["User or client<br/>HTTPS :443 to app_domain,<br/>only from alb_ingress_cidr"])
   dev(["Engineer<br/>AWS SSO: PowerUser plus a scoped IAM policy"])
   gha(["GitHub Actions<br/>OIDC role, no stored keys"])
 
@@ -49,6 +49,8 @@ flowchart TB
       s3ep["S3 gateway endpoint<br/>free, private route table"]
     end
 
+    r53["Route 53<br/>alias record for app_domain<br/>(existing zone, read only)"]
+    acm["ACM certificate<br/>free, DNS-validated"]
     ecr["Amazon ECR: product-service<br/>scan on push, encrypted"]
     cd["AWS CodeDeploy<br/>blue/green, automatic rollback"]
     sm["AWS Secrets Manager<br/>RDS-managed password"]
@@ -59,8 +61,11 @@ flowchart TB
     acc[("S3 access-log bucket<br/>optional switch")]
   end
 
-  user -->|"HTTP :80"| igw --> alb
-  alb -->|"HTTP :3000, health check /health"| t1
+  user -.->|"resolves app_domain"| r53
+  r53 -.->|"alias to the ALB"| alb
+  user -->|"HTTPS :443, TLS 1.3<br/>(HTTP :80 redirects to HTTPS)"| igw --> alb
+  acm -.->|"certificate on the 443 listener"| alb
+  alb -->|"HTTP :3000 inside the VPC (TLS ends at the ALB),<br/>health check /health"| t1
   alb --> t2
   t1 -->|"PostgreSQL :5432 over TLS"| rds
   t2 --> rds
@@ -94,13 +99,16 @@ What happens on `GET /products`, and what each hop is allowed to do:
 sequenceDiagram
   autonumber
   participant C as Client
+  participant R as Route 53
   participant ALB as ALB (public subnet)
   participant T as ECS task (private subnet)
   participant DB as RDS PostgreSQL (private subnet)
   participant L as S3 log bucket
 
-  C->>ALB: GET /products (HTTP :80)
-  Note over C,ALB: ALB security group accepts port 80 only from alb_ingress_cidr
+  C->>R: resolve app_domain
+  R-->>C: ALB address (alias record)
+  C->>ALB: GET /products (HTTPS :443, TLS 1.3, ACM certificate)
+  Note over C,ALB: ALB security group accepts 443 (and 80, which only redirects to HTTPS) from alb_ingress_cidr
   ALB-->>L: access log line (client, target, status, timings)
   ALB->>T: forward to :3000
   Note over ALB,T: app security group accepts :3000 only from the ALB security group
@@ -157,7 +165,7 @@ Infrastructure changes (Terraform) are still reviewed and applied by hand; the p
 | **NAT gateway** | Lets private tasks reach AWS service endpoints over HTTPS | One, in zone A, with an Elastic IP | Outbound only: nothing on the internet can start a connection to a task. A single NAT is a resilience gap. |
 | **S3 gateway endpoint** | Carries ECR image-layer traffic to S3 | Free; attached to the private route table | Pulls stay on the AWS network and bypass the NAT |
 | **Security groups** | Stateful firewalls for each tier | `alb`, `app`, `db`, chained (see [section 7](#7-network-security)) | Each accepts traffic only from the tier in front of it; every rule has a description |
-| **Application Load Balancer** | The only public entry point; spreads traffic over the tasks and checks their health | HTTP :80 listener, target group on :3000 with `/health` checks, 30-second connection draining, access logs on | Source range limited by `alb_ingress_cidr`; drops invalid HTTP headers. HTTP only and no authentication are gaps. |
+| **Application Load Balancer** | The only public entry point; spreads traffic over the tasks and checks their health | HTTPS :443 listener with an ACM certificate (TLS 1.3 policy), HTTP :80 listener that only redirects, target group on :3000 with `/health` checks, 30-second connection draining, access logs on | Source range limited by `alb_ingress_cidr`; drops invalid HTTP headers. TLS ends at the ALB (ALB to task is plain HTTP inside the VPC). No authentication is a gap. |
 | **Amazon ECS on AWS Fargate** | Runs the containers with no servers to manage | Cluster with Container Insights; service of 2 to 4 tasks; 0.25 vCPU and 512 MB each; CodeDeploy blue/green with automatic rollback (the deployment circuit breaker when `enable_blue_green` is off); 60-second health-check grace period; capacity providers `FARGATE` and `FARGATE_SPOT`, with an optional on-demand-plus-Spot strategy (`enable_fargate_spot`, off by default; see [Fargate_Spot.md](Fargate_Spot.md)) | `awsvpc` networking, no public IPs, non-root user, read-only root filesystem, no ECS Exec, task role with no permissions |
 | **Amazon ECR** | Stores the container image | Repository `product-service`, scan on push, AES-256 encryption, keeps the last 10 images | Private; pulled only by the execution role. Mutable tags are a gap. |
 | **Amazon RDS for PostgreSQL** | Stores the products | PostgreSQL 18.6 on `db.t4g.micro`, 20 GB gp3, single-AZ, 7-day backups, tags copied to snapshots | In private subnets, **not publicly accessible**, encrypted at rest, reachable only from the app security group, no outbound rules |
@@ -229,7 +237,7 @@ flowchart TB
 |---|---|---|
 | **0. Supply chain and code** | Secret scanner as a pre-commit hook; `.gitignore` for keys, state and `*.tfvars`; pinned Node and Alpine images; Trivy and `npm audit` on the image; Trivy and Checkov on Terraform; a multi-stage build that leaves npm out; saved plans | Secrets in git, vulnerable dependencies and base images, insecure infrastructure code, unreviewed changes |
 | **1. Identity and governance** | SSO sign-in; the engineer's IAM policy limited to `product-service-*` roles; trust policies requiring `aws:SourceAccount` and `aws:SourceArn`; a budget alert | Stolen long-lived keys, privilege escalation through role creation, the confused-deputy problem, runaway cost |
-| **2. Perimeter** | The ALB is the only internet-facing resource; `alb_ingress_cidr` limits who can reach it; invalid headers are dropped | Direct access to tasks or the database, malformed-request attacks. *Gap: HTTP only, no authentication, no WAF.* |
+| **2. Perimeter** | The ALB is the only internet-facing resource; `alb_ingress_cidr` limits who can reach it; invalid headers are dropped | Direct access to tasks or the database, malformed-request attacks. *Gap: no authentication, no WAF.* |
 | **3. Network segmentation** | Tasks and database in private subnets with no public IPs; security groups that only accept the previous tier; app egress only to 443 and the database; no database egress; S3 gateway endpoint | Lateral movement, data exfiltration over unexpected ports, inbound connections to private resources |
 | **4. Workload** | Non-root `node` user; read-only root filesystem; minimal image with no npm, npx, corepack or yarn; task role limited to the one database secret; no ECS Exec; health checks; CodeDeploy blue/green with automatic rollback (the ECS circuit breaker is used only when `enable_blue_green` is off) | A compromised container being able to write files, escalate, call AWS APIs, or stay broken after a bad release |
 | **5. Data** | RDS encrypted at rest and private; TLS to the database; password only in Secrets Manager; private encrypted S3 buckets with a TLS-only policy; 7-day backups | Reading data at rest or in transit, leaked credentials, public log buckets |
@@ -283,7 +291,7 @@ Traffic is allowed only from the tier in front, and only on the port needed.
 
 Other network controls: tasks and the database have no public IPs; the private route table reaches the internet only through the NAT gateway (outbound only); an S3 gateway endpoint keeps image-layer traffic off the NAT; the load balancer drops invalid HTTP headers.
 `alb_ingress_cidr` is a **required** variable with no default, and `0.0.0.0/0` is refused unless `allow_public_alb = true`, so an open load balancer is always deliberate. (This was added after a plan without the settings file silently fell back to an open default and reopened the load balancer during the AWS test; see [E2E_Test_Results.md](E2E_Test_Results.md).)
-**Gaps:** traffic to the ALB is plain HTTP and the API has no authentication; the 443 egress rule allows any destination.
+**Gaps:** the API has no authentication; the 443 egress rule allows any destination; traffic from the ALB to the tasks is plain HTTP inside the VPC (TLS ends at the ALB).
 
 ## 8. Data protection
 
@@ -293,7 +301,7 @@ Other network controls: tasks and the database have no public IPs; the private r
 | Database credentials | In Secrets Manager, created and managed by RDS, rotated automatically every 7 days (the secret's metadata shows a first rotation shortly after creation; a forced rotation was tested live: a retry race was found and fixed, and the re-test passed; see [Secrets.md](Secrets.md#live-rotation-test)) | Fetched by the app at runtime over TLS with its task role, and again after a rotation ([Secrets.md](Secrets.md)) | The task role, for that one secret; never in code, image, task definition, variables or state |
 | Container image | ECR, AES-256 | Pulled over HTTPS | The execution role |
 | Log files (S3) | SSE-S3, public access blocked, expiring | TLS-only bucket policy | Narrow per-writer policy statements |
-| Client traffic | n/a | **HTTP only** (gap: needs a domain and an ACM certificate) | Limited by `alb_ingress_cidr` Update: `enable_https` is written (off by default, not yet applied): see [HTTPS_and_Domain.md](HTTPS_and_Domain.md). |
+| Client traffic | n/a | **HTTPS** (TLS 1.3, ACM certificate) at `app_domain`; HTTP :80 only redirects. Applied and verified 2026-11-01 ([HTTPS_and_Domain.md](HTTPS_and_Domain.md)) | Limited by `alb_ingress_cidr` |
 
 ## 9. Logging, monitoring and detection
 
@@ -359,7 +367,7 @@ These are deliberate demo trade-offs or work not yet done. The full table, with 
 
 | Gap | Why it matters |
 |---|---|
-| HTTP only, no authentication, no WAF | Traffic is unencrypted and anyone allowed through the security group can read the products. The fix needs a domain and certificate. Update: an HTTPS switch is written, not yet applied ([HTTPS_and_Domain.md](HTTPS_and_Domain.md)); authentication and a WAF are still open. |
+| No authentication, no WAF | Anyone allowed through the security group can read the products. The load balancer admits only `alb_ingress_cidr` by default, because of this. (HTTPS is done: see [HTTPS_and_Domain.md](HTTPS_and_Domain.md).) |
 | Database TLS does not verify the server certificate | A network-position attacker could in theory impersonate the database |
 | Mutable ECR tags | `latest` can be overwritten, and rollbacks by tag are unreliable |
 | Single NAT gateway and single-AZ RDS | Not resilient to a zone failure |
