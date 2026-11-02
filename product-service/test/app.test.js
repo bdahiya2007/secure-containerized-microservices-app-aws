@@ -107,3 +107,22 @@ test('debug lines are not written at the default level', () => {
   assert.equal(lines.filter((l) => l.msg === 'hidden').length, 0);
   assert.equal(lines.filter((l) => l.msg === 'shown').length, 1);
 });
+
+test('the bare address returns a small JSON description that needs no database', async () => {
+  // The database is unreachable in these tests, so a 200 here also proves the route does not touch it
+  const res = await fetch(`${base}/`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /application\/json/);
+  assert.deepEqual(await res.json(), {
+    service: 'product-service',
+    status: 'ok',
+    endpoints: { products: '/products', health: '/health' },
+  });
+  assert.equal(requestLines().filter((l) => l.path === '/' && l.status === 200).length, 1);
+});
+
+test('an unknown path still returns 404 after the landing route was added', async () => {
+  const res = await fetch(`${base}/nope`);
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), { error: 'Not found' });
+});

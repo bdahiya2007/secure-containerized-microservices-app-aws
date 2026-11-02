@@ -163,7 +163,7 @@ product-service/
 ├── db/schema.sql         # products table and seed rows
 └── src/
     ├── server.js         # listens on :3000, graceful shutdown on SIGTERM
-    ├── app.js            # GET /products, GET /health
+    ├── app.js            # GET /products, GET /health, GET / (a small JSON description)
     ├── db-secret.js      # reads the database credentials from Secrets Manager at runtime (DB_SECRET_ARN), refreshes them after a rotation
     ├── db.js             # PostgreSQL pool: username from the secret, password function, one retry after a rotation
     ├── logger.js         # structured JSON logging (levels, no dependency)
@@ -252,7 +252,7 @@ needed); the commands are in the [runbook](docs/runbook.md#2-load-the-database-s
 | `500` | The query failed (for example the `products` table has not been created yet) |
 | `404` | Any other path |
 
-`GET /health` returns `200` when the database answers `SELECT 1` and `503` otherwise.
+`GET /health` returns `200` when the database answers `SELECT 1` and `503` otherwise. `GET /` returns a small JSON description of the service and its two routes (no database call, no version or infrastructure detail); any other path returns `404`.
 
 ## Design decisions
 
