@@ -26,18 +26,19 @@ This document explains each AWS service, and how the **principle of least privil
 flowchart TB
   user(["User or client<br/>HTTP :80, only from alb_ingress_cidr"])
   dev(["Engineer<br/>AWS SSO: PowerUser plus a scoped IAM policy"])
+  gha(["GitHub Actions<br/>OIDC role, no stored keys"])
 
   subgraph aws ["AWS account, us-east-1"]
     subgraph vpc ["VPC 10.0.0.0/16 across two availability zones"]
       igw["Internet gateway"]
 
       subgraph pub ["Public subnets: 10.0.0.0/24 and 10.0.1.0/24"]
-        alb["Application Load Balancer<br/>drops invalid headers, access logs on"]
+        alb["Application Load Balancer<br/>blue and green target groups<br/>drops invalid headers, access logs on"]
         nat["NAT gateway<br/>one, in zone A"]
       end
 
       subgraph priv ["Private subnets: 10.0.10.0/24 and 10.0.11.0/24, no public IPs"]
-        subgraph svc ["ECS Fargate service, 2 to 4 tasks across both zones"]
+        subgraph svc ["ECS Fargate service, 2 to 4 tasks across both zones<br/>2 on-demand, Fargate Spot above that"]
           t1["Task 1<br/>Node.js 26 on Alpine<br/>non-root, read-only filesystem"]
           t2["Task 2 ... 4"]
         end
@@ -49,6 +50,7 @@ flowchart TB
     end
 
     ecr["Amazon ECR: product-service<br/>scan on push, encrypted"]
+    cd["AWS CodeDeploy<br/>blue/green, automatic rollback"]
     sm["AWS Secrets Manager<br/>RDS-managed password"]
     asg["Application Auto Scaling<br/>CPU 60 percent and 500 requests per task per minute"]
     cw["CloudWatch<br/>logs, Container Insights, dashboard, scaling alarms"]
@@ -65,7 +67,7 @@ flowchart TB
   mig -->|":5432 over TLS, load schema once"| rds
 
   ecr -.->|"image pull via NAT and S3 endpoint"| t1
-  sm -.->|"password injected at start"| t1
+  t1 -.->|"reads the DB secret at runtime<br/>(task role)"| sm
   t1 -.->|"HTTPS :443 via NAT"| nat --> igw
   t1 -.->|"image layers"| s3ep
 
@@ -78,8 +80,10 @@ flowchart TB
   cw -.->|"alarms trigger"| asg
   asg -.->|"sets the task count"| svc
 
-  dev -->|"docker push"| ecr
-  dev -->|"terraform apply"| aws
+  gha -->|"build, push (commit SHA tag)"| ecr
+  gha -->|"start a deployment"| cd
+  cd -->|"shifts traffic 10 percent a minute"| alb
+  dev -->|"terraform apply, by hand"| aws
 ```
 
 ## 2. Request flow
@@ -374,7 +378,7 @@ It is designed to be created for a test and destroyed: nothing is left billing a
 
 The Mermaid diagrams above are the source. For viewers that don't render Mermaid, PNG copies are in `docs/images/`: [overview](images/architecture-overview.png), [request flow](images/architecture-request-flow.png),
 [build and deploy](images/architecture-build-deploy.png), [defense in depth](images/architecture-defense-in-depth.png), [least privilege](images/architecture-least-privilege.png) and [logging](images/architecture-logging.png).
-All six diagrams were rendered with `mermaid-cli` 12.0.0 on 2026-10-31, which confirms their syntax. The PNGs are generated from the Mermaid text, so they go stale if a diagram is edited; regenerate them with `mmdc -i diagram.mmd -o diagram.png`.
+All six diagrams were re-rendered with `mermaid-cli` on 2026-11-02 from the current Mermaid text (the overview, defense-in-depth and least-privilege images were stale before that and are refreshed), which confirms their syntax. The PNGs are generated from the Mermaid text, so they go stale if a diagram is edited; regenerate them with `mmdc -i diagram.mmd -o diagram.png`.
 The overview is tall because it shows every connection, so open the image at full size.
 
 ## Related documents
