@@ -33,7 +33,7 @@ Security groups chain the layers, and each accepts traffic only from the one bef
 
 ```mermaid
 flowchart LR
-  I["Internet"] -->|"80"| A["alb SG"]
+  I["Internet"] -->|"443 (80 only redirects)"| A["alb SG"]
   A -->|"3000"| P["app SG"]
   P -->|"5432"| D["db SG"]
 ```
