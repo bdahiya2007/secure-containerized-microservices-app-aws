@@ -250,7 +250,7 @@ variable "enable_dr_replica" {
 }
 
 variable "enable_dr_failover" {
-  description = "Route 53 failover routing for app_domain: this Region's record becomes the PRIMARY, with a health check that follows a CloudWatch alarm on the load balancer's healthy targets (no probe, so the ALB can stay restricted to one address). The Region B stack adds the SECONDARY record. Needs enable_https. Off by default."
+  description = "Route 53 failover routing for app_domain: this Region's record becomes the PRIMARY, with a health check that follows a CloudWatch alarm on the service's running tasks (no probe, so the ALB can stay restricted to one address). The Region B stack adds the SECONDARY record. Needs enable_https. Off by default."
   type        = bool
   default     = false
 
