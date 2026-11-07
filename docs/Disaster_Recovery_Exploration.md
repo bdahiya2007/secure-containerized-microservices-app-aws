@@ -2,6 +2,8 @@
 
 **Status: design exploration only. Nothing in this page is built or deployed.** It answers "Step 1: explore Aurora Serverless v2 and Aurora Global Database" and proposes what "Step 2: update the architecture" should be. Facts below were read from the AWS documentation on 2026-11-01 (sources at the end). Costs are **estimates from list prices**, not measured. Where something could not be confirmed, it says so.
 
+The choices made after this exploration are in [DR_Design_Decisions.md](DR_Design_Decisions.md).
+
 ## The goal
 
 Survive the loss of a whole AWS Region (us-east-1) with a small, cheap second Region and a documented recovery. The chosen shape is **pilot light**:
