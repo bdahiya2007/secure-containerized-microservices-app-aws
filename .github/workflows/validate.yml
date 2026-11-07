@@ -52,6 +52,12 @@ jobs:
           terraform init -backend=false
           terraform validate
 
+      - name: Validate the Region B stack
+        working-directory: terraform/region-b
+        run: |
+          terraform init -backend=false
+          terraform validate
+
       - name: Check appspec.yaml and the deploy script
         run: python3 -I scripts/check-appspec.py
 
