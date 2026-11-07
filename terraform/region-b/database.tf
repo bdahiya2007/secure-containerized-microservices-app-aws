@@ -2,11 +2,30 @@
 # layer (docs/Disaster_Recovery_Exploration.md). It takes writes only after a failover promotes it. No master user or password
 # here: a secondary cluster inherits them from the primary, and the secret is replicated by the main stack (enable_dr_replica).
 
+data "aws_caller_identity" "current" {}
+
+# Written out instead of left to the default, with the same effect: the account's own IAM policies decide who may use the key.
+# No other principal is named and nothing is public.
+data "aws_iam_policy_document" "db_key" {
+  statement {
+    sid       = "EnableAccountAdministration"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+}
+
 # Encrypted storage needs a key in this Region; a global database cannot reuse Region A's key
 resource "aws_kms_key" "db" {
   description             = "Aurora secondary cluster storage (Region B)"
   enable_key_rotation     = true
   deletion_window_in_days = 7 # the shortest, so a demo rebuild is not blocked for long
+  policy                  = data.aws_iam_policy_document.db_key.json
 }
 
 resource "aws_kms_alias" "db" {
@@ -65,6 +84,10 @@ resource "aws_rds_cluster_instance" "secondary" {
   instance_class       = "db.serverless"
   db_subnet_group_name = aws_db_subnet_group.main.name
   publicly_accessible  = false
+
+  # The default, stated: minor upgrades are applied through the global cluster, and AWS documents that this setting has no
+  # effect on a cluster that is part of a global database
+  auto_minor_version_upgrade = true
 
   lifecycle {
     ignore_changes = [engine_version]

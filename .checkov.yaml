@@ -46,23 +46,31 @@ skip-check:
   # Log groups keep 14 days on purpose (low volume, cost); a year of retention is not needed here.
   - CKV_AWS_338
   # Deletion protection is off so a demo can be destroyed with terraform destroy. Turn it on for production.
+  # (CKV_AWS_139 is the same rule for the Aurora clusters in terraform/aurora.tf and terraform/region-b/database.tf.)
   - CKV_AWS_150
   - CKV_AWS_293
+  - CKV_AWS_139
   # The Aurora cluster (terraform/aurora.tf) has automated backups with 7-day retention and point-in-time restore. A separate
   # AWS Backup plan adds a vault, a role and cost for a demo whose data is seed data that the migration task reloads.
   - CKV2_AWS_8
   # RDS monitoring extras (enhanced monitoring, Performance Insights, log exports, query logging) add
   # cost and setup for no benefit at demo size.
+  # The Aurora clusters export their PostgreSQL log only when enable_rds_logs is on (off by default, for cost), so Checkov's
+  # cluster log-capture and query-logging checks (CKV_AWS_324, CKV2_AWS_27) are accepted for the same reason.
   - CKV_AWS_118
   - CKV_AWS_129
   - CKV_AWS_353
   - CKV2_AWS_30
+  - CKV_AWS_324
+  - CKV2_AWS_27
   # The availability zone data source is filtered to standard zones and takes the first two. A fixed
   # zone list would make the code less portable across regions and accounts.
   - CKV_AWS_394
   # The app authenticates with the RDS-managed password in Secrets Manager. IAM database
-  # authentication would need token generation in the app (planned for production).
+  # authentication would need token generation in the app (planned for production). CKV_AWS_162 is the same rule for the
+  # Aurora clusters.
   - CKV_AWS_161
+  - CKV_AWS_162
   # The deploy role's trust policy (terraform/bootstrap) pins the repository by immutable owner and repository ID plus
   # the environment, which is stricter than the repo-name pattern this rule recognises (false positive).
   - CKV_AWS_358
