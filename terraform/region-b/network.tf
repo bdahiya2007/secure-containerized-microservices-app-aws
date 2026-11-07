@@ -102,7 +102,6 @@ resource "aws_vpc_endpoint" "s3" {
 
 # ---- Security groups: internet -> ALB -> app -> database ----
 resource "aws_security_group" "alb" {
-  #checkov:skip=CKV2_AWS_5: attached by the load balancer and the ECS task added in piece 3c; remove this exception there
   name_prefix = "${local.name}-alb-"
   description = "Application Load Balancer (Region B): HTTPS from the allowed CIDR, port 80 only to redirect"
   vpc_id      = aws_vpc.main.id
@@ -143,7 +142,6 @@ resource "aws_security_group" "alb" {
 }
 
 resource "aws_security_group" "app" {
-  #checkov:skip=CKV2_AWS_5: attached by the load balancer and the ECS task added in piece 3c; remove this exception there
   name_prefix = "${local.name}-app-"
   description = "ECS tasks (Region B): port 3000 from the load balancer only, outbound via the NAT gateway"
   vpc_id      = aws_vpc.main.id

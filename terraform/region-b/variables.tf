@@ -66,3 +66,36 @@ variable "enable_rds_logs" {
   type        = bool
   default     = false
 }
+
+variable "app_domain" {
+  description = "Region B's own name for the app (for example usw2.products.example.com): it lets Region B be tested directly before a failover. Keep the real value in the untracked terraform.tfvars."
+  type        = string
+
+  validation {
+    condition     = endswith(var.app_domain, ".${var.hosted_zone_name}")
+    error_message = "app_domain must be a name inside hosted_zone_name (for example usw2.products.example.com in example.com)."
+  }
+}
+
+variable "hosted_zone_name" {
+  description = "The existing public Route 53 hosted zone that holds app_domain (for example example.com). It is only read: this stack adds the certificate validation record and one alias record, and never changes the zone or other records."
+  type        = string
+}
+
+variable "image_tag" {
+  description = "The image tag Region B runs. Region A's pipeline moves :latest to every image that deployed; ECR replication copies it here."
+  type        = string
+  default     = "latest"
+}
+
+variable "desired_count" {
+  description = "Tasks kept running in Region B. One is the pilot light: it proves the image, the replicated secret and the read-only database work together before a disaster. Scale it up by hand in a failover (docs/DR_Design_Decisions.md)."
+  type        = number
+  default     = 1
+}
+
+variable "db_name" {
+  description = "The database name the app connects to; the same as the main stack"
+  type        = string
+  default     = "products"
+}
