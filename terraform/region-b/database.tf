@@ -7,6 +7,7 @@ data "aws_caller_identity" "current" {}
 # Written out instead of left to the default, with the same effect: the account's own IAM policies decide who may use the key.
 # No other principal is named and nothing is public.
 data "aws_iam_policy_document" "db_key" {
+  #checkov:skip=CKV_AWS_356,CKV_AWS_109,CKV_AWS_111: this is a KMS key policy, where Resource "*" means only this key, and the account-root statement is the AWS default that hands access decisions to IAM; the IAM-policy rules do not fit a key policy
   statement {
     sid       = "EnableAccountAdministration"
     effect    = "Allow"
