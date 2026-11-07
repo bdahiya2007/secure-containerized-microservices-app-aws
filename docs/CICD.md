@@ -146,9 +146,12 @@ Every pull request runs these (none needs AWS access). All must pass before merg
 | Code (SAST) | Semgrep 1.183.0, rule sets `nodejs`, `javascript`, `owasp-top-ten`, `secrets` | `product-service/src` |
 | Libraries | `npm audit --omit=dev` and Trivy `fs` on the lock file | production dependencies |
 | Container image | Trivy `image` (vulnerabilities and embedded secrets) and Trivy `config` (Dockerfile) | the image built from the PR, never pushed |
-| Infrastructure as code | Checkov 3.3.29 with the reviewed exceptions in `.checkov.yaml` | `terraform/` |
+| Infrastructure as code | Checkov 3.3.29 with the reviewed exceptions in `.checkov.yaml` | `terraform/`, including `terraform/region-b/` |
+| Rotation function (DR design) | Python unit tests (standard library only, no AWS access) and Semgrep with the Python rules (`p/python`, `p/owasp-top-ten`, `p/secrets`) | `lambdas/db-rotation/` |
 
 **Also, every week** (`.github/workflows/scheduled-scan.yml`, Mondays 06:17 UTC, and on demand): the image is rebuilt from `main` with a freshly pulled base image and scanned with Trivy (full findings go to the Security tab; the run fails on HIGH or CRITICAL findings that have a fix), and the production dependencies are audited. PR checks only run when something changes, so this is what catches a new vulnerability in the base image or a dependency in between. GitHub emails the owner if a run fails.
+
+**Terraform validation** also covers the Region B stack: the validate job runs `terraform init -backend=false` and `terraform validate` for `terraform/`, `terraform/bootstrap/` and `terraform/region-b/`, and `terraform fmt -check` for all of them. Checkov ignores resources behind a switch that is off (`enable_aurora`), so checks on those resources first show up on code that builds them unconditionally; the exceptions in `.checkov.yaml` cover both.
 
 On deploy, the ECR scan-on-push result is a final gate (CRITICAL stops the deployment). Dependabot proposes weekly updates for GitHub Actions, npm packages, the Docker base images and Terraform providers; each update goes through the same checks.
 

@@ -213,6 +213,23 @@ So a rotation in the middle of a deployment is survivable: both the old and the 
 - **The task role is the only reader.** The execution role no longer has any access to it (phase 2).
 - **TLS to the database** is on (`DB_SSL`), but the server certificate is not verified yet; see the README gaps.
 
+## With Aurora Global Database (written, not yet applied)
+
+The [disaster recovery design](DR_Design_Decisions.md) replaces the RDS instance with an Aurora Global Database (switch `enable_aurora`, off by default). Everything above describes the RDS setup that was built and tested. **This section describes code that is written and validated but has not been applied or tested in AWS.**
+
+**Why the secret changes.** AWS documents that Secrets Manager's managed credentials (`manage_master_user_password`) are not supported with Aurora Global Database, so RDS can no longer create and rotate the secret. The secret becomes self-managed.
+
+| | RDS today | Aurora (`enable_aurora`) |
+|---|---|---|
+| Who creates the password | RDS | Terraform, from an ephemeral random-password resource, as a **write-only** value: it never enters the state or the plan (the plan shows `(write-only attribute)`) |
+| The secret | Created and rotated by RDS | Created by Terraform (`terraform/aurora.tf`), optionally **replicated to the recovery Region** (`enable_dr_replica`); a guard stops Terraform from undoing a rotation |
+| Rotation | RDS, every 7 days | The function in [`lambdas/db-rotation/`](../lambdas/db-rotation/lambda_function.py), every 7 days (`db_rotation_days`), no rotation at apply time |
+| What the app does | Reads the secret named in `DB_SECRET_ARN` | The same, unchanged. In Region B it reads the replica by name |
+
+**The rotation function** follows the Secrets Manager contract (create, set, test and finish steps, each safe to run again). It sets the new password through the RDS control plane (`ModifyDBCluster`), so it needs no VPC, no database driver and no network path to the cluster, and Aurora Global Database replicates the change to the secondary. Its role can use one secret, one cluster and its own log group, and only Secrets Manager in this account can invoke it.
+
+**The trade-off.** `testSecret` cannot try a login with the new password: the RDS Data API, the only login-free way to run SQL, always uses the secret's current version. The function checks that the cluster is available and the change applied instead. The application's retry after a failed login (above) covers the short window, and the failover drill rotates a password end to end under load, as the earlier rotation tests did on RDS. Until that drill, treat this rotation as unproven in AWS: it has 14 offline unit tests with fake clients, nothing more.
+
 ## Limits and next steps
 
 - **Tested live, with limits.** Three forced rotations (a burst test that found a retry race, a re-test after the fix, and one under sustained load), and the scheduled 7-day rotation has not yet run with this code. Rotations were also tested under sustained load and during a deployment.

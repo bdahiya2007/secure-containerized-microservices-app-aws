@@ -106,7 +106,7 @@ flowchart LR
 
 ## Requirements
 
-- Terraform >= 1.5
+- Terraform >= 1.11 (the Aurora write-only password arguments need 1.11; `use_lockfile` in the backend needs 1.10)
 - AWS credentials with permission to create VPC, RDS, ECR, ECS, ELB, IAM and CloudWatch resources. The AWS-managed **PowerUserAccess** permission set covers everything except IAM, so
   the stack's two ECS roles fail with `AccessDenied` on `iam:CreateRole` unless the permission set also includes
   [docs/iam/product-service-iam-policy.json](../docs/iam/product-service-iam-policy.json), a scoped policy limited to roles named `product-service-*`.
@@ -116,10 +116,13 @@ flowchart LR
 
 | File | Contents |
 |---|---|
-| `versions.tf` | Terraform (>= 1.10) and AWS provider versions, default tags |
+| `versions.tf` | Terraform (>= 1.11) and the AWS and `archive` provider versions, default tags |
 | `backend.tf` | S3 remote state with native locking; the bucket name comes from `backend.hcl` (git-ignored, copy `backend.hcl.example`) |
 | `variables.tf` | Input variables |
 | `network.tf` | VPC, public/private subnets, IGW, NAT, route tables, security groups |
+| `aurora.tf` | Only with `enable_aurora` (off by default): the Aurora Global Database primary (Serverless v2), the self-managed secret and its optional recovery-Region replica, and the password rotation function with its role and schedule. Written for the [DR design](../docs/DR_Design_Decisions.md), not yet applied |
+| `dns.tf` | Only with `enable_https`: the ACM certificate, its validation records and the Route 53 alias record (the hosted zone is only read) |
+| `region-b/` | Separate stack with its own state for the recovery Region (network and Aurora secondary so far); see its [README](region-b/README.md). Not applied yet |
 | `rds.tf` | DB subnet group and PostgreSQL 18 instance (password managed by Secrets Manager) |
 | `ecr.tf` | ECR repository and lifecycle policy |
 | `ecs.tf` | Log group, cluster and its capacity providers (`FARGATE`, `FARGATE_SPOT`), IAM roles, task definition, service, ALB, target group, listener |
@@ -129,7 +132,7 @@ flowchart LR
 | `codedeploy.tf` | Only with `enable_blue_green`: the green target group, the CodeDeploy-controlled ECS service, the CodeDeploy application, deployment group and service role |
 | `bootstrap/` | Separate stack, applied by hand with local state: the GitHub OIDC deploy role the pipeline assumes (see [docs/CICD.md](../docs/CICD.md)) |
 | `migrate.tf` | One-off Fargate task definition that runs `node src/migrate.js` from the app image to load `db/schema.sql` into the private database (run by hand with `aws ecs run-task`) |
-| `outputs.tf` | ALB DNS name, ECR URL, RDS endpoint, DB secret ARN |
+| `outputs.tf` | App URL, ALB DNS name, ECR URL, database endpoint, DB secret ARN and name, global cluster and rotation outputs |
 
 ## Variables
 
@@ -160,6 +163,14 @@ flowchart LR
 | `enable_rds_logs` | `false` | Export PostgreSQL and upgrade logs to CloudWatch Logs (14-day retention) |
 | `alb_ingress_cidr` | **none (required)** | CIDR allowed to reach the load balancer on port 80, and on 443 with `enable_https`. Set it to your own address as a `/32` (in the untracked `terraform/demo.auto.tfvars`, or with `-var`; never commit your address). `0.0.0.0/0` is refused unless `allow_public_alb` is true. |
 | `allow_public_alb` | `false` | Set to `true` to allow `alb_ingress_cidr = "0.0.0.0/0"`, which opens the load balancer to the whole internet. Off by default, so an open load balancer is always deliberate. |
+| `enable_https` | `false` | Serve the app over HTTPS at `app_domain`: an ACM certificate (validated in `hosted_zone_name`), a 443 listener that CodeDeploy uses, an HTTP redirect and a Route 53 alias. See [HTTPS_and_Domain.md](../docs/HTTPS_and_Domain.md) |
+| `app_domain` / `hosted_zone_name` | empty | The name to serve (for example `products.example.com`) and the existing public hosted zone that holds it (only read). Real values go in the untracked `demo.auto.tfvars` |
+| `enable_aurora` | `false` | Use an Aurora PostgreSQL Serverless v2 cluster (the global-database primary) instead of the RDS instance, with a self-managed rotating secret. Replaces the database. See [DR_Design_Decisions.md](../docs/DR_Design_Decisions.md) |
+| `aurora_engine_version` | `18.6` | Aurora PostgreSQL version; 18.6 is offered with Global Database and Serverless v2 in us-east-1 and us-west-2 (confirmed 2026-11-07). Both Regions must match |
+| `aurora_min_capacity` / `aurora_max_capacity` | `0.5` / `4` | Serverless v2 capacity range in ACUs. AWS recommends 8 for a global primary; the drill measures replication lag at this low setting |
+| `db_password_version` | `1` | Version of the initial write-only password; bump it to set a fresh one (rotation changes the password on its own) |
+| `db_rotation_days` | `7` | How often Secrets Manager rotates the Aurora password |
+| `dr_region` / `enable_dr_replica` | `us-west-2` / `false` | The recovery Region, and whether the database secret is replicated there (needed by the Region B stack) |
 
 ## Usage
 
@@ -217,8 +228,10 @@ push the image, then run the full apply; see [docs/ECR_Runbook.md](../docs/ECR_R
 |---|---|
 | `alb_dns_name` | Public URL of the service |
 | `ecr_repository_url` | Where to push the image |
-| `rds_endpoint` | Database host name |
+| `app_url` | `https://<app_domain>` with `enable_https`, otherwise the load balancer's own `http://` address |
+| `rds_endpoint` | Database host name (the RDS instance, or the Aurora cluster with `enable_aurora`) |
 | `db_secret_arn` | Secrets Manager secret holding the DB credentials |
+| `db_secret_name`, `global_cluster_id`, `global_cluster_engine_version`, `aurora_cluster_arn`, `db_rotation_function` | Only with `enable_aurora`: what the Region B stack reads from this stack's state, and the rotation function's name |
 | `log_bucket` | Central S3 log bucket (prefixes `alb/`, `cloudtrail/`) |
 | `s3_access_log_bucket` | Separate bucket for the central bucket's S3 server access logs (empty when `enable_s3_access_logging` is off) |
 | `dashboard_url` | Console link to the CloudWatch dashboard |
