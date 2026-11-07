@@ -1,12 +1,26 @@
+# The database the app and the migration task connect to: the RDS instance, or the Aurora cluster with enable_aurora.
+# one(...) is null for the resource that is not created, so each branch is safe whichever switch is set.
+locals {
+  db_host       = var.enable_aurora ? one(aws_rds_cluster.primary[*].endpoint) : one(aws_db_instance.main[*].address)
+  db_port       = var.enable_aurora ? one(aws_rds_cluster.primary[*].port) : one(aws_db_instance.main[*].port)
+  db_secret_arn = var.enable_aurora ? one(aws_secretsmanager_secret.db[*].arn) : one(aws_db_instance.main[*].master_user_secret[0].secret_arn)
+}
+
+# The instance gained a count; this keeps the existing one in state under its new address
+moved {
+  from = aws_db_instance.main
+  to   = aws_db_instance.main[0]
+}
+
 # Log groups for the RDS log exports, created first so they get a 14-day retention
 resource "aws_cloudwatch_log_group" "rds_postgresql" {
-  count             = var.enable_rds_logs ? 1 : 0
+  count             = var.enable_rds_logs && !var.enable_aurora ? 1 : 0
   name              = "/aws/rds/instance/${var.project_name}-db/postgresql"
   retention_in_days = 14
 }
 
 resource "aws_cloudwatch_log_group" "rds_upgrade" {
-  count             = var.enable_rds_logs ? 1 : 0
+  count             = var.enable_rds_logs && !var.enable_aurora ? 1 : 0
   name              = "/aws/rds/instance/${var.project_name}-db/upgrade"
   retention_in_days = 14
 }
@@ -16,7 +30,10 @@ resource "aws_db_subnet_group" "main" {
   subnet_ids = aws_subnet.private[*].id
 }
 
+# The RDS instance. With enable_aurora it is replaced by the Aurora cluster in aurora.tf.
 resource "aws_db_instance" "main" {
+  count = var.enable_aurora ? 0 : 1
+
   identifier     = "${var.project_name}-db"
   engine         = "postgres"
   engine_version = "18.6" # latest major on RDS (no extended support charges), pinned to a minor for repeatable builds

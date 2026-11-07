@@ -198,3 +198,53 @@ variable "hosted_zone_name" {
   type        = string
   default     = ""
 }
+
+# ---- Aurora Global Database (DR design: docs/DR_Design_Decisions.md) ----
+
+variable "enable_aurora" {
+  description = "Use an Aurora PostgreSQL Serverless v2 cluster (the primary of an Aurora global database) instead of the RDS instance, with a self-managed, rotating secret. Changing it replaces the database (the data is seed data, reloaded by the migration task). Off by default."
+  type        = bool
+  default     = false
+}
+
+variable "aurora_engine_version" {
+  description = "Aurora PostgreSQL version for the global database. 18.3 or later supports both Serverless v2 and Global Database in us-east-1 and us-west-2; confirm the exact version is offered before applying (aws rds describe-db-engine-versions)."
+  type        = string
+  default     = "18.4"
+}
+
+variable "aurora_min_capacity" {
+  description = "Aurora Serverless v2 minimum capacity in ACUs. Low for a demo: AWS recommends 8 for the primary of a global database, which costs about $0.96 an hour, so the drill measures the replication lag at this setting."
+  type        = number
+  default     = 0.5
+}
+
+variable "aurora_max_capacity" {
+  description = "Aurora Serverless v2 maximum capacity in ACUs"
+  type        = number
+  default     = 4
+}
+
+variable "db_password_version" {
+  description = "Version of the initial write-only master password. Changing it sets a fresh password and a new secret value; leave it alone otherwise (the rotation function changes the password on its own)."
+  type        = number
+  default     = 1
+}
+
+variable "db_rotation_days" {
+  description = "How often Secrets Manager rotates the Aurora master password"
+  type        = number
+  default     = 7
+}
+
+variable "dr_region" {
+  description = "The recovery Region, where the database secret is replicated"
+  type        = string
+  default     = "us-west-2"
+}
+
+variable "enable_dr_replica" {
+  description = "Replicate the database secret to dr_region (needed by the Region B stack). Only used with enable_aurora."
+  type        = bool
+  default     = false
+}
