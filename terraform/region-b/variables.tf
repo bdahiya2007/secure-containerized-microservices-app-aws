@@ -37,3 +37,32 @@ variable "alb_ingress_cidr" {
     error_message = "alb_ingress_cidr must be a valid CIDR block, for example 203.0.113.10/32."
   }
 }
+
+variable "state_bucket" {
+  description = "The S3 bucket that holds the main stack's state (the same bucket as backend.hcl). Region B reads the main stack's outputs from it. Account-specific, so supply it in the untracked terraform.tfvars."
+  type        = string
+}
+
+variable "main_state_key" {
+  description = "The key of the main stack's state in that bucket"
+  type        = string
+  default     = "secure-containerized-microservices-app-aws/terraform.tfstate"
+}
+
+variable "aurora_min_capacity" {
+  description = "Aurora Serverless v2 minimum capacity in ACUs for the secondary cluster. Low for a demo; the drill measures the replication lag at this setting."
+  type        = number
+  default     = 0.5
+}
+
+variable "aurora_max_capacity" {
+  description = "Aurora Serverless v2 maximum capacity in ACUs for the secondary cluster"
+  type        = number
+  default     = 4
+}
+
+variable "enable_rds_logs" {
+  description = "Export the secondary cluster's PostgreSQL log to CloudWatch Logs (14-day retention). Off by default."
+  type        = bool
+  default     = false
+}

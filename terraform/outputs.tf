@@ -76,3 +76,13 @@ output "db_rotation_function" {
   description = "The Secrets Manager rotation function for the Aurora master password (empty unless enable_aurora)"
   value       = one(aws_lambda_function.db_rotation[*].function_name)
 }
+
+output "global_cluster_engine_version" {
+  description = "The global cluster's engine version (empty unless enable_aurora); the Region B secondary must run the same major and minor version"
+  value       = one(aws_rds_global_cluster.main[*].engine_version)
+}
+
+output "db_secret_name" {
+  description = "The database secret's name (empty unless enable_aurora); the Region B stack finds its replica by this name"
+  value       = one(aws_secretsmanager_secret.db[*].name)
+}
