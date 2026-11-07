@@ -1,0 +1,2 @@
+# Copy to backend.hcl (git-ignored) and set the real bucket name: the same bucket the main stack uses.
+bucket = "YOUR-STATE-BUCKET-NAME"
