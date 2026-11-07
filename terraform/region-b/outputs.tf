@@ -36,3 +36,25 @@ output "db_reader_endpoint" {
   description = "Where the Region B app connects. The product service only reads, so the reader endpoint works before and after a promotion (with one instance it reaches the writer)."
   value       = aws_rds_cluster.secondary.reader_endpoint
 }
+
+output "app_url" {
+  description = "Region B's own HTTPS name, for testing it directly before a failover"
+  value       = "https://${var.app_domain}"
+}
+
+output "alb_dns_name" {
+  value = aws_lb.app.dns_name
+}
+
+output "ecs_cluster_name" {
+  value = aws_ecs_cluster.main.name
+}
+
+output "ecs_service_name" {
+  value = aws_ecs_service.app.name
+}
+
+output "ecr_repository_url" {
+  description = "Where the main stack's replication rule copies images to"
+  value       = aws_ecr_repository.app.repository_url
+}
