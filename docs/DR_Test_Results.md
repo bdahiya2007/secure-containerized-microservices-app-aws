@@ -1,6 +1,6 @@
 # Disaster recovery: what was built, what the drills showed, what went wrong, and how to troubleshoot
 
-**Status: one paid session on 2026-11-07, partly written up.** Drills 1 to 4 are recorded below. **Drill 4b (the alarm path) and Drill 5 (the database failover) are pending and marked as such.** Everything here is measured from the live session unless it says "hypothesis". Costs are estimates; Cost Explorer lags by many hours.
+**Status: one paid session on 2026-11-07, partly written up.** Drills 1 to 4b are recorded below, with the CloudWatch evidence for 4b. **Drill 5 (the database failover) is pending and marked as such.** Everything here is measured from the live session unless it says "hypothesis". Costs are estimates; Cost Explorer lags by many hours.
 
 How to read it: [the session in one table](#1-the-session-at-a-glance), [the results of each drill](#2-results-by-drill), [every problem, with cause and fix](#3-issues-found-and-how-they-were-resolved), [a troubleshooting guide by symptom](#4-troubleshooting-guide), and [what is still unproven](#5-what-is-still-unproven). The plan the session followed is [DR_Runbook.md](DR_Runbook.md), the design is [DR_Design_Decisions.md](DR_Design_Decisions.md).
 
@@ -22,7 +22,7 @@ How to read it: [the session in one table](#1-the-session-at-a-glance), [the res
 | 2. Password rotation end to end | **Failed first, a real flaw found and fixed; re-run passed.** 104 s, 141 of 141 requests answered |
 | 3. Planned switchover to Region B and back | **Completed (56 s and 53 s), with a finding:** about **32 s of failed reads** on the main name; the expectation of "no gap" was wrong |
 | 4. DNS failover (Region A's app stopped) | **Passed.** Region B answered the main name within about **56 s**; 12 failed probe requests over about 24 s; HTTPS stayed valid. The alarm path was **not** exercised (see 4b) |
-| 4b. The alarm path | **Pending** |
+| 4b. The alarm path (Region A kept down 9 minutes) | **Passed, with a correction to the design's assumptions.** Three separate signals fired at very different times: Region B answered at **+42 s**, the Route 53 health check went unhealthy at about **+4.5 to 5.5 min**, and the CloudWatch **alarm state** changed only at **+8 min 41 s**. Route 53 follows the metric's data, not the alarm's state |
 | 5. Database failover with data loss allowed | **Pending** |
 
 ## 2. Results by drill
@@ -68,10 +68,81 @@ Region A's tasks were taken to zero (autoscaling minimum set to 0 first, then th
 - **Region B answered the main name about 56 seconds after the service was stopped**, with HTTPS valid (Region B's certificate also covers the main name).
 - **User-visible failures: 12 of 418 probe requests (503), one run of about 24 s**, all from Region A's load balancer once its targets were gone.
 - **Restore:** two tasks running about 47 s after the restore, Region A answering again about 75 to 82 s.
-- **Surprise:** the **CloudWatch alarm stayed `OK` and the Route 53 health check stayed healthy** for the whole outage, yet the name failed over. The likely reason is the PRIMARY record's alias has `evaluate_target_health` on, so Route 53 noticed the load balancer had no healthy targets within about a minute. The alarm needs 3 full minutes of no running tasks and was restored before it could trip. That means **the alarm-driven path, meant for a whole-Region outage, was not exercised** by this drill.
+- **Surprise:** the **CloudWatch alarm stayed `OK` and the Route 53 health check stayed healthy** for the whole outage, yet the name failed over. Drill 4b confirmed why: the PRIMARY record's alias has `evaluate_target_health` on, and the load balancer's healthy-target count had no data from 22:51, so Route 53 failed over within about a minute. The alarm-driven path needed several more minutes and was restored before it could trip, so this drill did **not** exercise it; Drill 4b did.
 
-### Drill 4b: the alarm path (pending)
-Same drill with Region A kept down until the alarm reaches `ALARM` and the health check turns unhealthy. *Results to be added.*
+### Drill 4b: the alarm path
+The same outage, but Region A's service was kept at zero tasks for 9 minutes so the alarm-driven path could trip (autoscaling minimum set to 0 first, service to 0 at **22:51:34 UTC**, restored at **23:00:50**).
+
+**Timeline, from the CloudWatch data (UTC; seconds are after the service was stopped)**
+
+| Time | Seconds | What |
+|---|---|---|
+| 22:51:34 | 0 | Region A's service set to zero tasks |
+| 22:52:00 | | The service's `RunningTaskCount` reports **0**: its **last datapoint**. No data at all after this until the restore |
+| 22:52:18 | **+42 s** | The main name is answered by **Region B** (HTTPS valid): the load balancer's own health, through the alias's `evaluate_target_health` |
+| 22:56 | about **+4.5 to 5.5 min** | The **Route 53 health check** (which follows the alarm's metric) turns **unhealthy** (its status metric drops to 0) |
+| 23:00:15 | **+8 min 41 s** | The **alarm state** changes `OK` to `ALARM` |
+| 23:00:50 | | Region A's service restored to 2 tasks |
+| 23:02:00 | | Two tasks running again (the metric reports 2) |
+| 23:03:15 | restore + 2 min 25 s | The alarm changes `ALARM` to `OK` |
+| 23:03:57 | | The main name is answered by Region A again |
+| 23:04 | | The Route 53 health check reports healthy again |
+
+**The alarm's state history, as CloudWatch recorded it** (`describe-alarm-history`; the alarm watches `RunningTaskCount` below 1, minimum statistic, 3 of 3 one-minute periods, missing data treated as breaching):
+
+| UTC | Change | CloudWatch's stated reason |
+|---|---|---|
+| 20:59:15 | `INSUFFICIENT_DATA` to `OK` | 3 of the last 3 datapoints were 2.0, not less than the threshold (the alarm was new) |
+| **23:00:15** | **`OK` to `ALARM`** | "1 out of the last 3 datapoints [0.0 (22:52:00)] was less than the threshold (1.0) and **2 missing datapoints were treated as [Breaching]**" |
+| **23:03:15** | **`ALARM` to `OK`** | "1 out of the last 3 datapoints [2.0 (23:02:00)] was not less than the threshold (1.0) and 1 missing datapoint was treated as [Breaching]" |
+
+**The raw per-minute data** (UTC; "no data" means CloudWatch holds no datapoint for that minute):
+
+| Minute | Running tasks (min) | Route 53 health check (1 healthy) | Healthy targets (Region A, blue group) |
+|---|---|---|---|
+| 22:44 | 2 | 1 | 2 |
+| 22:45 | 2 | 1 | 2 |
+| 22:46 | 2 | 1 | 2 |
+| 22:47 | 2 | 1 | 2 |
+| 22:48 | 2 | 1 | 2 |
+| 22:49 | 2 | 1 | 2 |
+| 22:50 | 2 | 1 | 2 |
+| 22:51 | 2 | 1 | no data |
+| 22:52 | 0 | 1 | no data |
+| 22:53 | no data | 1 | no data |
+| 22:54 | no data | 1 | no data |
+| 22:55 | no data | 1 | no data |
+| 22:56 | no data | 0 | no data |
+| 22:57 | no data | 0 | no data |
+| 22:58 | no data | 0 | no data |
+| 22:59 | no data | 0 | no data |
+| 23:00 | no data | 0 | no data |
+| 23:01 | 0 | 0 | 2 |
+| 23:02 | 2 | 0 | 2 |
+| 23:03 | 2 | 0 | 2 |
+| 23:04 | 2 | 1 | 2 |
+| 23:05 | 2 | 1 | 2 |
+| 23:06 | 2 | 1 | no data |
+
+![Running tasks in Region A's service, with the alarm threshold and the key events marked](images/dr-4b-running-tasks.png)
+
+*The metric the alarm watches: 2 tasks, then 0 at 22:52, then no data until the restore. The dashed lines mark the events in the table above; their labels are cut off at the edge of the chart, so use the table for exact times.*
+
+![Route 53 health check status](images/dr-4b-route53-health.png)
+
+*The health check turned unhealthy at 22:56, about four minutes before the alarm's state changed, and healthy again at 23:04.*
+
+![Healthy targets behind Region A's load balancer](images/dr-4b-healthy-targets.png)
+
+*The load balancer's healthy-target count has no data from 22:51 until 23:01. This is the signal behind the +42 s failover.*
+
+**Reading it**
+- **There were three layers, at very different speeds.** (1) The alias's target-health evaluation moved traffic in **42 seconds**. (2) The Route 53 health check, which follows the alarm's **metric stream**, turned unhealthy after about **5 minutes**. (3) The CloudWatch **alarm state** took **8 minutes 41 seconds**.
+- **Route 53 does not use the alarm's state.** The health check went unhealthy while the alarm was still `OK`, which matches AWS's own note that Route 53 monitors the metric's data stream, not the alarm. With no data, it counts the check as unhealthy (the setting chosen in the design).
+- **Why the alarm state is slow (hypothesis, not confirmed):** after the last datapoint at 22:52 the metric stopped reporting; CloudWatch's own reason at 23:00:15 still shows the window as "one real datapoint and two missing", which is a window about six minutes old, so it appears to evaluate missing data with a lag of several minutes. My earlier estimate of "3 to 4 minutes" for the alarm was wrong.
+- **What the design gets from each layer:** the alias's evaluation protects users in the first minute when the load balancer is up but its targets are gone. The alarm-fed health check is the backstop for a whole-Region or load-balancer outage, where the load balancer's own health data would not be available; it needs about 5 minutes. The alarm's own state drives nothing else here: no notification is attached to it.
+- **Probe on the main name: 408 requests, 16 failed, the longest run 14 (about 28 s).** All 16 failures were **503s from Region A's load balancer**, between 22:51:49 and 22:52:27: its targets were gone, and DNS answers still pointed at Region A for part of that window (alias answers live 60 seconds; the last failure was 9 seconds after the first Region B answer).
+- **Restore:** both tasks were running again within about a minute, the alarm returned to `OK` 2 minutes 25 seconds after the restore command, and Region A answered the main name again after about 3 minutes.
 
 ### Drill 5: database failover with data loss allowed (pending)
 *Results to be added: lag before, promotion time, Region B scale-up time, total recovery time, and the fail-back.*
@@ -100,6 +171,7 @@ Same drill with Region A kept down until the alarm reaches `ALARM` and the healt
 | 8 | **About 32 s of failed reads during a planned switchover (Drill 3)** | 19 failed probe requests; the main name returned 503 and 500 | Region A's app uses the cluster (writer) endpoint (hypothesis) | Planned: use the reader endpoint in Region A's app | **Open** |
 | 9 | Region B returned 500 after the switch back | `/products` returned 500 for a while | Not diagnosed (the logs were not read) | Recovered by itself | **Open** |
 | 10 | The first-minute lag value of about 36 minutes | An implausible spike when writes began | Hypothesis: an artifact of the metric after an idle period | To be re-checked in Drill 5 | **Open** |
+| 11 | The alarm's state changed 8 min 41 s after the outage, later than the Route 53 health check | The alarm showed `OK` for 8 minutes while its metric had no data and the health check was already unhealthy | Route 53 reads the metric's data stream, not the alarm state (AWS documents this); CloudWatch evaluates missing data with a lag of several minutes (hypothesis) | None needed: the failover does not wait for the alarm state. Documented; the design doc's estimate of 3 to 4 minutes was wrong | Understood |
 
 **Process notes, for honesty:** the plan expected a DNS failover in 4 to 6 minutes and got about 56 seconds (better, for a reason that was not predicted); and it expected no gap in the switchover and got 32 seconds (worse). Both predictions came from reading documentation, and both were corrected by running the thing.
 
@@ -133,6 +205,8 @@ Commands use placeholders in angle brackets. Run everything for Region B with `-
 
 **The main name does not fail over to Region B.** (1) Does the SECONDARY record exist (`enable_failover_record`), with its own set identifier? (2) Is Region B healthy on its own name? (3) Look at both signals: the load balancer's target health (the alias's `evaluate_target_health`, fast) and the alarm-driven health check (`aws cloudwatch describe-alarms`, `AWS/Route53 HealthCheckStatus`, about 4 to 5 minutes). (4) Remember DNS caching: alias records are answered with a 60-second lifetime.
 
+**The alarm still says `OK` minutes after the service stopped.** That is expected: CloudWatch evaluates a metric that has stopped reporting with a lag (8 min 41 s observed). Check the Route 53 health check instead (`AWS/Route53` `HealthCheckStatus`, 1 healthy / 0 unhealthy), which follows the metric's data stream and turned unhealthy after about 5 minutes; and the load balancer's `HealthyHostCount`, which drives the alias failover in about a minute. Do not rely on the alarm state to see a failover coming.
+
 **HTTPS shows a certificate error after a failover.** Region B's certificate must list the main name as an alternative name (it does when `failover_domain` is set); check `openssl s_client -connect <name>:443 -servername <name>` and look at the subject alternative names.
 
 **`terraform plan` in the Region B stack cannot read outputs.** The main stack must be applied first with `enable_aurora`, `enable_dr_replica`; the outputs it reads (`global_cluster_id`, `global_cluster_engine_version`, `db_secret_name`) are empty otherwise.
@@ -143,7 +217,7 @@ Commands use placeholders in angle brackets. Run everything for Region B with `-
 
 ## 5. What is still unproven
 
-- **The alarm-driven failover path** (Drill 4b), the one meant for a whole-Region outage.
+- **A failover where the load balancer's own health data is unavailable** (a real Region or load balancer outage): Drill 4b exercised the alarm-fed health check but the alias's target health still worked.
 - **The database failover with data loss allowed** (Drill 5): the real recovery time and any data loss.
 - **A switchover without a read gap** (needs the reader endpoint in Region A, then a re-test).
 - **The cause of Region B's 500s after a switch back**, and the lag metric's first-minute spike.
