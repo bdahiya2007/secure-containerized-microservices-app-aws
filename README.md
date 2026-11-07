@@ -191,6 +191,7 @@ docs/
 ├── Rollback_Test.md              # proof: a broken release deployed to the live service, no failed request, automatic rollback, CloudWatch metrics
 ├── Load_Test_and_Optimization.md # the 2026-11-02 load test with CloudWatch numbers and charts, and every optimization made so far
 ├── Secrets.md                    # database credentials in Secrets Manager: how the app reads them, rotation, IAM, rollout, debugging
+├── DR_Test_Results.md            # DR session 2026-11-07: results of each drill, every issue with cause and fix, a troubleshooting guide by symptom, and what is still unproven (Drills 4b and 5 pending)
 ├── DR_Design_Decisions.md        # DR Phase B: the ten design decisions (Aurora Global Database, self-managed replicated secret, separate Region B stack, HTTPS in both Regions), cost and drill plan (design only, not built)
 ├── Disaster_Recovery_Exploration.md # Aurora Serverless v2 and Global Database explored; pilot-light design, RTO/RPO, cost, open risks (design only, not built)
 ├── HTTPS_and_Domain.md           # enable_https: ACM certificate, 443 listener, redirect, Route 53 alias; how to turn it on and the demo-only public window (applied and verified 2026-11-01)
