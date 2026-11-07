@@ -82,6 +82,28 @@ variable "hosted_zone_name" {
   type        = string
 }
 
+variable "failover_domain" {
+  description = "The main app name (for example products.example.com), the one Route 53 moves to Region B in a failover. Region B's certificate must cover it, or HTTPS on that name would show a certificate error after a failover. Keep the real value in the untracked terraform.tfvars. Empty means no failover record and a certificate for app_domain only."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.failover_domain == "" || endswith(var.failover_domain, ".${var.hosted_zone_name}")
+    error_message = "failover_domain must be a name inside hosted_zone_name (for example products.example.com in example.com)."
+  }
+}
+
+variable "enable_failover_record" {
+  description = "Create the SECONDARY failover record for failover_domain, pointing at Region B's load balancer. Apply it after the main stack has its PRIMARY record (enable_dr_failover there). Off by default."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_failover_record || var.failover_domain != ""
+    error_message = "enable_failover_record needs failover_domain."
+  }
+}
+
 variable "image_tag" {
   description = "The image tag Region B runs. Region A's pipeline moves :latest to every image that deployed; ECR replication copies it here."
   type        = string

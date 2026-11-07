@@ -27,6 +27,7 @@ The main stack is applied first with `enable_aurora = true` and `enable_dr_repli
 1. Main stack, in two steps: first `enable_aurora = true`, `enable_dr_replica = true` and a **targeted apply** of the ECR repository and the replication rule (`aws_ecr_replication_configuration.dr`), because **images are copied only if they are pushed after the rule exists**; push the first image; then the full apply, and the schema load.
 2. This stack: `terraform apply`. The one task starts from the replicated `:latest`, reads the replicated secret and the Aurora secondary's reader endpoint, and answers on `app_domain`.
 3. Check Region B directly through `app_domain` before any failover.
+4. Failover DNS: set `failover_domain` (the main name) and `enable_failover_record = true`. The main stack must already have its PRIMARY record (`enable_dr_failover = true` there). Region B's certificate covers `failover_domain` as well, because after a failover Route 53 answers that name with this load balancer.
 
 Before step 1 check the account's existing ECR replication configuration (`aws ecr describe-registry`): the rule in the main stack **replaces** it, because replication is configured once per registry.
 
@@ -38,4 +39,6 @@ Before step 1 check the account's existing ECR replication configuration (`aws e
 - **One task, rolling deploys:** the service has no CodeDeploy; it scales by hand in a failover (`aws ecs update-service --desired-count`), and a deployment circuit breaker rolls back a bad task.
 - **Database:** the task connects to the secondary's **reader endpoint**. The product service only reads, so it works before a failover and after the promotion.
 - **Secret:** the task role may read only the replica of the database secret, found by name.
+- **Failover DNS:** this stack holds the SECONDARY half of the failover pair; the PRIMARY (Region A's record and its alarm-driven health check) is in the main stack (`failover.tf`). The two stacks create separate records with the same name and different set identifiers.
+- **The certificate covers both names** (`app_domain` and `failover_domain`). Both Regions use the same DNS validation record for the shared name, so destroying one stack removes a record the other's certificate renewal needs; fine for a short session, worth knowing.
 - **No ALB access logs** in Region B (a second regional log bucket is not worth it for a short-lived pilot light); the exception is explained in `alb.tf`.

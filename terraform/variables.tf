@@ -248,3 +248,14 @@ variable "enable_dr_replica" {
   type        = bool
   default     = false
 }
+
+variable "enable_dr_failover" {
+  description = "Route 53 failover routing for app_domain: this Region's record becomes the PRIMARY, with a health check that follows a CloudWatch alarm on the load balancer's healthy targets (no probe, so the ALB can stay restricted to one address). The Region B stack adds the SECONDARY record. Needs enable_https. Off by default."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_dr_failover || var.enable_https
+    error_message = "enable_dr_failover needs enable_https (the failover record is the HTTPS name)."
+  }
+}
