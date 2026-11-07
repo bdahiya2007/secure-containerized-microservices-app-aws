@@ -86,6 +86,10 @@ resource "aws_rds_cluster_instance" "primary" {
   db_subnet_group_name = aws_db_subnet_group.main.name
   publicly_accessible  = false
 
+  # The default, stated: minor upgrades are applied through the global cluster, and AWS documents that this setting has no
+  # effect on a cluster that is part of a global database
+  auto_minor_version_upgrade = true
+
   lifecycle {
     ignore_changes = [engine_version]
   }
