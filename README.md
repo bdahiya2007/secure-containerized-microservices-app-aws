@@ -199,6 +199,8 @@ docs/
 ├── images/                       # CloudWatch dashboard charts from the AWS test (8) and architecture diagram images (6)
 ├── vulnerability-scan-report.md  # image and Terraform scan findings, remediation, before and after
 └── iam/product-service-iam-policy.json  # scoped IAM policy that lets a PowerUserAccess role create the stack's two ECS roles
+lambdas/
+└── db-rotation/          # DR design: Secrets Manager rotation function for the Aurora master password (Python, 14 offline tests; not deployed yet)
 scripts/
 ├── render-appspec.py     # fills the task definition (and the Fargate / Fargate Spot strategy) into appspec.yaml for a deployment
 ├── check-appspec.py      # offline check that appspec.yaml matches Terraform and every action is SHA-pinned

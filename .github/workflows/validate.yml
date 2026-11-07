@@ -108,6 +108,10 @@ jobs:
         working-directory: product-service
         run: npm audit --omit=dev --audit-level=high
 
+      # The database password rotation function (DR design). Standard library only: no packages, no AWS access.
+      - name: Run the rotation function tests
+        run: python3 -m unittest discover -s lambdas/db-rotation -v
+
   image-build:
     name: Build and scan the container image
     runs-on: ubuntu-24.04
@@ -164,6 +168,9 @@ jobs:
           "$RUNNER_TEMP/tools/bin/semgrep" scan --metrics=off --error --quiet \
             --config p/nodejs --config p/javascript --config p/owasp-top-ten --config p/secrets \
             product-service/src
+          "$RUNNER_TEMP/tools/bin/semgrep" scan --metrics=off --error --quiet \
+            --config p/python --config p/owasp-top-ten --config p/secrets \
+            lambdas
 
   terraform-security:
     name: Terraform security scan
