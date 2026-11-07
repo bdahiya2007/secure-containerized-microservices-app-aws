@@ -7,6 +7,8 @@
 #          Run it from anywhere; it works from the repository root. The drift check uses your settings in
 #          terraform/demo.auto.tfvars (alb_ingress_cidr is required), so pass --skip-plan to leave it out.
 # Exit:    0 if no check failed, 1 otherwise. SKIP means an optional log is switched off; WARN is advice.
+# DR:      with enable_aurora, enable_https or enable_dr_failover the matching checks run too (the Terraform outputs decide).
+#          The Aurora, rotation and failover branches are written but have not run against a real deployment yet.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
@@ -27,8 +29,11 @@ py() { python3 -I -c "$1"; }
 
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
 if [ -z "$ACCOUNT" ]; then echo "FAIL  AWS session is not valid (try: aws sso login)"; exit 1; fi
+AURORA_ARN=$(tf_out aurora_cluster_arn); FAILOVER_ALARM=$(tf_out failover_alarm_name)   # empty unless enable_aurora / enable_dr_failover
+DB_ID="$PROJECT-db"; [ -n "$AURORA_ARN" ] && DB_ID="$PROJECT-aurora"
 ALB=$(tf_out alb_dns_name); BASE=$(tf_out app_url); LOG_BUCKET=$(tf_out log_bucket); ACCESS_BUCKET=$(tf_out s3_access_log_bucket)
 RDS_HOST=$(tf_out rds_endpoint)
+HOST=${BASE#*://}; HOST=${HOST%%/*}
 LPORT=80; case "$BASE" in https://*) LPORT=443 ;; esac   # the listener CodeDeploy shifts traffic on
 if [ -z "$ALB" ]; then echo "FAIL  no Terraform outputs found (is the stack applied, and are you in the right folder?)"; exit 1; fi
 CLUSTER="$PROJECT-cluster"; SERVICE="$PROJECT"
@@ -76,9 +81,24 @@ tasks_private() {
     [ "$(aws ec2 describe-network-interfaces --network-interface-ids "$eni" --query 'NetworkInterfaces[0].Association.PublicIp' --output text)" = None ] || return 1
   done
 }
-rds_json() { aws rds describe-db-instances --db-instance-identifier "$PROJECT-db" --query 'DBInstances[0]' --output json; }
-rds_secure() { rds_json | py 'import json,sys; d=json.load(sys.stdin); assert d["DBInstanceStatus"]=="available" and d["StorageEncrypted"] and not d["PubliclyAccessible"] and d["Engine"]=="postgres"'; }
-rds_exports() { rds_json | py 'import json,sys; d=json.load(sys.stdin); assert sorted(d.get("EnabledCloudwatchLogsExports") or [])==["postgresql","upgrade"]'; }
+using_aurora() { [ -n "$AURORA_ARN" ]; }
+# The RDS instance, or with enable_aurora the Aurora cluster
+rds_json() {
+  if using_aurora; then aws rds describe-db-clusters --db-cluster-identifier "$DB_ID" --query 'DBClusters[0]' --output json
+  else aws rds describe-db-instances --db-instance-identifier "$DB_ID" --query 'DBInstances[0]' --output json; fi
+}
+rds_secure() {
+  if using_aurora; then
+    rds_json | py 'import json,sys; d=json.load(sys.stdin); assert d["Status"]=="available" and d["StorageEncrypted"] and d["Engine"]=="aurora-postgresql"' || return 1
+    [ "$(aws rds describe-db-instances --filters "Name=db-cluster-id,Values=$DB_ID" --query 'length(DBInstances[?PubliclyAccessible==`true`])' --output text)" = 0 ]
+  else
+    rds_json | py 'import json,sys; d=json.load(sys.stdin); assert d["DBInstanceStatus"]=="available" and d["StorageEncrypted"] and not d["PubliclyAccessible"] and d["Engine"]=="postgres"'
+  fi
+}
+rds_exports() {
+  local want='["postgresql","upgrade"]'; using_aurora && want='["postgresql"]'
+  rds_json | WANT="$want" py 'import json,os,sys; d=json.load(sys.stdin); assert sorted(d.get("EnabledCloudwatchLogsExports") or [])==json.loads(os.environ["WANT"])'
+}
 rds_exports_configured() { [ "$(rds_json | py 'import json,sys; print(len(json.load(sys.stdin).get("EnabledCloudwatchLogsExports") or []))')" -gt 0 ]; }
 db_port_closed() { ! timeout 5 bash -c "</dev/tcp/$RDS_HOST/5432"; }
 db_sg_locked() { aws ec2 describe-security-groups --filters "Name=group-name,Values=$PROJECT-db-*" --query 'SecurityGroups[0]' --output json | py 'import json,sys; d=json.load(sys.stdin); assert d["IpPermissionsEgress"]==[] and all(not p["IpRanges"] for p in d["IpPermissions"])'; }
@@ -115,6 +135,20 @@ task_definition_has_no_credentials() {
 }
 # The execution role (ECS's own identity for starting a task) cannot read the database secret: only the task role can.
 execution_role_secret_access() { [ "$(aws iam list-role-policies --role-name "$PROJECT-execution" --query 'length(PolicyNames)' --output text)" = 0 ]; }
+# ---- HTTPS (enable_https) ----
+https_listener() { aws elbv2 describe-listeners --load-balancer-arn "$LB_ARN" --query 'Listeners[?Port==`443`]|[0].[Protocol,SslPolicy,length(Certificates)]' --output text | grep -qE '^HTTPS[[:space:]]+ELBSecurityPolicy-TLS13[^[:space:]]*[[:space:]]+1$'; }
+http_redirects() { [ "$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://$HOST/health")" = 301 ]; }
+# ---- Aurora Global Database (enable_aurora) ----
+aurora_global_member() { [ "$(aws rds describe-global-clusters --query "length(GlobalClusters[?contains(GlobalClusterMembers[].DBClusterArn, '$AURORA_ARN')])" --output text)" = 1 ]; }
+secret_rotation() { aws secretsmanager describe-secret --secret-id "$(tf_out db_secret_arn)" --query '[RotationEnabled,RotationRules.AutomaticallyAfterDays]' --output text | grep -qE '^True[[:space:]]+[0-9]+$'; }
+rotation_function() { aws lambda get-function --function-name "$(tf_out db_rotation_function)" --query 'Configuration.[State,VpcConfig.VpcId]' --output text | grep -qE '^Active[[:space:]]+(None|)$'; }
+secret_replicas() { aws secretsmanager describe-secret --secret-id "$(tf_out db_secret_arn)" --query 'length(ReplicationStatus || `[]`)' --output text; }
+# ---- DNS failover (enable_dr_failover) ----
+failover_wired() {
+  local hc; hc=$(tf_out failover_health_check_id); [ -n "$hc" ] || return 1
+  aws route53 get-health-check --health-check-id "$hc" --query 'HealthCheck.HealthCheckConfig.[Type,InsufficientDataHealthStatus,AlarmIdentifier.Name]' --output text | grep -q "^CLOUDWATCH_METRIC[[:space:]]Unhealthy[[:space:]]$FAILOVER_ALARM$" || return 1
+  aws cloudwatch describe-alarms --alarm-names "$FAILOVER_ALARM" --query 'MetricAlarms[0].TreatMissingData' --output text | grep -qx breaching
+}
 scaling_configured() {
   aws application-autoscaling describe-scalable-targets --service-namespace ecs --resource-ids "service/$CLUSTER/$SERVICE" --query 'ScalableTargets[0].[MinCapacity,MaxCapacity]' --output text | grep -qE '^[0-9]+[[:space:]]+[0-9]+$' \
     && [ "$(aws application-autoscaling describe-scaling-policies --service-namespace ecs --resource-id "service/$CLUSTER/$SERVICE" --query 'length(ScalingPolicies)' --output text)" -ge 1 ]
@@ -202,11 +236,28 @@ echo "--- network and data security"
 check "ALB accepts port 80 only from a single /32" alb_single_cidr
 check "ALB is not open to 0.0.0.0/0" alb_not_open
 check "Tasks have no public IP" tasks_private
-check "RDS is available, PostgreSQL, encrypted, not public" rds_secure
+check "Database (RDS, or Aurora with enable_aurora) is available, PostgreSQL, encrypted, not public" rds_secure
 check "Database port 5432 is NOT reachable from this machine" db_port_closed
 check "db security group: no outbound rules, inbound only from security groups" db_sg_locked
 check "app security group: outbound only TCP 443 and 5432" app_sg_egress
 check "VPC default security group is empty" default_sg_empty
+
+echo "--- HTTPS, Aurora and failover (only what is switched on)"
+case "$BASE" in
+  https://*)
+    check "HTTPS: a 443 listener with one certificate and a TLS 1.3 policy" https_listener
+    check "HTTP on port 80 only redirects to HTTPS (301)" http_redirects ;;
+  *) skip "HTTPS (enable_https is off)" ;;
+esac
+if using_aurora; then
+  check "Aurora cluster is a member of the global database" aurora_global_member
+  check "Database secret rotates on a schedule" secret_rotation
+  check "Rotation function is active and not in a VPC" rotation_function
+  if [ "$(secret_replicas)" -ge 1 ] 2>/dev/null; then pass "Database secret is replicated to the recovery Region"; else skip "Database secret replica (enable_dr_replica is off)"; fi
+else
+  skip "Aurora checks (enable_aurora is off)"
+fi
+if [ -n "$FAILOVER_ALARM" ]; then check "Failover: the health check follows the alarm (no data counts as unhealthy, missing data as breaching)" failover_wired; else skip "Failover (enable_dr_failover is off)"; fi
 
 echo "--- IAM least privilege"
 check "Both ECS roles have the confused-deputy conditions" roles_conditions

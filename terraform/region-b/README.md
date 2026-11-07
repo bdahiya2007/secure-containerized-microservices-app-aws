@@ -24,7 +24,7 @@ The main stack is applied first with `enable_aurora = true` and `enable_dr_repli
 
 ## Order of use (the paid session)
 
-1. Main stack, in two steps: first `enable_aurora = true`, `enable_dr_replica = true` and a **targeted apply** of the ECR repository and the replication rule (`aws_ecr_replication_configuration.dr`), because **images are copied only if they are pushed after the rule exists**; push the first image; then the full apply, and the schema load.
+1. ECR first, in this order: the main stack with `enable_aurora = true`, `enable_dr_replica = true` and a **targeted apply** of the ECR repository and the replication rule (`aws_ecr_replication_configuration.dr`), because **images are copied only if they are pushed after the rule exists**; then a **targeted apply of this stack's own ECR repository** (`-target=aws_ecr_repository.app -target=aws_ecr_lifecycle_policy.app`), because if the first push reaches Region B first, replication creates the repository itself and this stack's create then fails with "already exists"; then push the first image; then the main stack's full apply and the schema load.
 2. This stack: `terraform apply`. The one task starts from the replicated `:latest`, reads the replicated secret and the Aurora secondary's reader endpoint, and answers on `app_domain`.
 3. Check Region B directly through `app_domain` before any failover.
 4. Failover DNS: set `failover_domain` (the main name) and `enable_failover_record = true`. The main stack must already have its PRIMARY record (`enable_dr_failover = true` there). Region B's certificate covers `failover_domain` as well, because after a failover Route 53 answers that name with this load balancer.
