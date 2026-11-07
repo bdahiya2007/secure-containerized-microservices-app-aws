@@ -77,8 +77,8 @@ class FakeSecrets:
             self.stages[RemoveFromVersionId].discard(VersionStage)
         if MoveToVersionId is not None:
             self.stages[MoveToVersionId].add(VersionStage)
-            if VersionStage == "AWSCURRENT":
-                self.stages[MoveToVersionId].discard("AWSPENDING")
+            # Not modelled: Secrets Manager does NOT drop AWSPENDING from the version that becomes current (found on the first
+            # real run), so the function has to remove it itself
 
 
 class FakeRds:

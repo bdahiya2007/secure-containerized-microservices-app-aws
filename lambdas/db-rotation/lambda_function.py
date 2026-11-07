@@ -169,6 +169,9 @@ def finish_secret(arn, token):
         MoveToVersionId=token,
         RemoveFromVersionId=current_version,
     )
-    if SET_LABEL in metadata["VersionIdsToStages"].get(token, []):
-        secrets.update_secret_version_stage(SecretId=arn, VersionStage=SET_LABEL, RemoveFromVersionId=token)
+    # Tidy the labels: Secrets Manager leaves AWSPENDING on the version that just became current (seen on the first real run), and
+    # the marker for "the change was already requested" has done its job
+    for label in (SET_LABEL, "AWSPENDING"):
+        if label in metadata["VersionIdsToStages"].get(token, []):
+            secrets.update_secret_version_stage(SecretId=arn, VersionStage=label, RemoveFromVersionId=token)
     logger.info("Version %s is now current", token)
