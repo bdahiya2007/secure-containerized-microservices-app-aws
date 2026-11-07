@@ -94,5 +94,5 @@ output "failover_health_check_id" {
 
 output "failover_alarm_name" {
   description = "The CloudWatch alarm the health check follows (empty unless enable_dr_failover). Setting it to ALARM by hand rehearses a failover without touching the app."
-  value       = one(aws_cloudwatch_metric_alarm.no_healthy_targets[*].alarm_name)
+  value       = one(aws_cloudwatch_metric_alarm.no_running_tasks[*].alarm_name)
 }

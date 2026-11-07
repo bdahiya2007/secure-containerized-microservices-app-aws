@@ -38,7 +38,7 @@
       }
     },
     {
-      "Sid": "PassProductServiceRolesToEcsTasksAndCodeDeployOnly",
+      "Sid": "PassProductServiceRolesToEcsTasksCodeDeployAndLambdaOnly",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::ACCOUNT_ID:role/product-service-*",
@@ -46,7 +46,8 @@
         "StringEquals": {
           "iam:PassedToService": [
             "ecs-tasks.amazonaws.com",
-            "codedeploy.amazonaws.com"
+            "codedeploy.amazonaws.com",
+            "lambda.amazonaws.com"
           ]
         }
       }
