@@ -203,6 +203,7 @@ terraform/region-b/   # DR: the recovery Region's own stack (network first; the 
 lambdas/
 └── db-rotation/          # DR design: Secrets Manager rotation function for the Aurora master password (Python, 14 offline tests; not deployed yet)
 scripts/
+├── dr-probe.sh           # DR drills: a request probe that writes one CSV line per request and summarises the longest gap
 ├── render-appspec.py     # fills the task definition (and the Fargate / Fargate Spot strategy) into appspec.yaml for a deployment
 ├── check-appspec.py      # offline check that appspec.yaml matches Terraform and every action is SHA-pinned
 ├── secret-scan.py        # secret and sensitive-data scanner (pre-commit hook)
