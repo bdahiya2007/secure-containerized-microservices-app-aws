@@ -55,6 +55,19 @@ resource "aws_route53_record" "app" {
   name    = var.app_domain
   type    = "A"
 
+  # With enable_dr_failover this is the PRIMARY of a failover pair: Route 53 answers with the Region B record (created by the
+  # Region B stack) when the health check, which follows the alarm in failover.tf, is unhealthy
+  set_identifier  = var.enable_dr_failover ? "primary" : null
+  health_check_id = var.enable_dr_failover ? aws_route53_health_check.primary[0].id : null
+
+  dynamic "failover_routing_policy" {
+    for_each = var.enable_dr_failover ? [1] : []
+
+    content {
+      type = "PRIMARY"
+    }
+  }
+
   alias {
     name                   = aws_lb.app.dns_name
     zone_id                = aws_lb.app.zone_id

@@ -86,3 +86,13 @@ output "db_secret_name" {
   description = "The database secret's name (empty unless enable_aurora); the Region B stack finds its replica by this name"
   value       = one(aws_secretsmanager_secret.db[*].name)
 }
+
+output "failover_health_check_id" {
+  description = "The Route 53 health check behind the PRIMARY record (empty unless enable_dr_failover)"
+  value       = one(aws_route53_health_check.primary[*].id)
+}
+
+output "failover_alarm_name" {
+  description = "The CloudWatch alarm the health check follows (empty unless enable_dr_failover). Setting it to ALARM by hand rehearses a failover without touching the app."
+  value       = one(aws_cloudwatch_metric_alarm.no_healthy_targets[*].alarm_name)
+}
