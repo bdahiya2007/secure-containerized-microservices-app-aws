@@ -208,7 +208,7 @@ variable "enable_aurora" {
 }
 
 variable "aurora_engine_version" {
-  description = "Aurora PostgreSQL version for the global database. 18.3 or later supports both Serverless v2 and Global Database in us-east-1 and us-west-2. 18.6 was the newest 18.x minor in AWS's release notes on 2026-11-07 (18.6.1 is a patch of it); confirm the exact string is offered in both Regions before applying (aws rds describe-db-engine-versions). Both Regions must run the same major and minor version for a managed switchover or failover."
+  description = "Aurora PostgreSQL version for the global database. 18.3 or later supports both Serverless v2 and Global Database in us-east-1 and us-west-2. 18.6 was the newest 18.x minor in AWS's release notes on 2026-11-07 (18.6.1 is a patch of it); confirmed on 2026-11-07 with aws rds describe-db-engine-versions: 18.6 is offered in us-east-1 and us-west-2 with Global Database and Serverless v2 support (patches such as 18.6.1 are not separate version strings). Both Regions must run the same major and minor version for a managed switchover or failover."
   type        = string
   default     = "18.6"
 }
