@@ -37,7 +37,8 @@ The new Region B stack holds its network, ALB, ECS service, KMS key, Aurora seco
 
 ## Design notes
 
-- **Secret.** Create the secret ourselves and replicate it to Region B. Set the cluster's password from a value that never reaches Terraform state (*verify* that the pinned AWS provider supports a write-only password on the cluster). Rotate with a Secrets Manager rotation function that changes the database password and writes the new secret version, and re-run the earlier rotation tests (under load and during a deployment). The Region B task reads the **replica's** ARN.
+- **Secret.** Create the secret ourselves and replicate it to Region B (replicas receive new versions automatically). The password never reaches Terraform state: the AWS provider has write-only arguments for it, `master_password_wo` on the cluster and `secret_string_wo` on the secret version, both needing **Terraform 1.11 or later** (the repository requires 1.10 today, so the minimum is raised in the infrastructure piece; *verify* an ephemeral random-password source for the value). The Region B task reads the **replica's** ARN.
+- **Rotation function (written, tested, not deployed).** [`lambdas/db-rotation/`](../lambdas/db-rotation/lambda_function.py) is a Secrets Manager rotation function in Python with 14 offline unit tests. It changes the password through the **RDS control plane** (`ModifyDBCluster`), not by logging in, so it needs no VPC, no database driver and no network path to the cluster; Aurora Global Database replicates the change to the secondary. **Trade-off:** `testSecret` cannot try a login with the new password (the RDS Data API, the only login-free way to run SQL, always uses the secret's *current* version), so it checks that the cluster is available and the change applied. The application's existing retry after a failed login covers the window, and the drill rotates a password end to end. The Data API was checked and works on a global cluster's primary writer (Aurora PostgreSQL 18.3 and later, us-east-1 and us-west-2, not on T instance classes), so it remains an option for a later login test.
 - **Health check.** A Route 53 health check that follows a CloudWatch alarm on Region A's load balancer (for example, no healthy hosts). *Verify* how it behaves when the alarm has no data because the whole Region is down: it should count as unhealthy, so the name moves.
 - **Database cutover.** The app already takes the endpoint from `DB_HOST` and retries once after a failed login. The Region B service uses Region B's cluster endpoint, which is read-only until the failover promotes it; `GET /products` only reads, so Region B can serve before the promotion.
 - **Images.** ECR cross-Region replication, so Region B can always pull the current image. The pipeline still deploys to Region A; how Region B's service picks up a new release is a Phase C decision.
@@ -61,6 +62,15 @@ With retries and extras, about $3 to $4. Leftover keys and secrets cost cents. T
 3. **Switchover** to Region B and back (RPO 0): time the gap with a request probe.
 4. **Failover drill** with `failover-global-cluster --allow-data-loss`: measure real RTO and RPO from CloudWatch, including `AuroraGlobalDBRPOLag` under load.
 5. Capture the charts, record the results as in [Rollback_Test.md](Rollback_Test.md), then destroy everything and check for leftovers in both Regions.
+
+## Phase C progress
+
+| Piece | Status |
+|---|---|
+| Rotation function and tests (`lambdas/db-rotation/`), run in CI, scanned by Semgrep (Python rules) | **Written and tested offline** |
+| Aurora replacing RDS in Region A, the self-managed secret and replica, the rotation schedule and permissions (Terraform; raises the minimum Terraform version to 1.11) | Next |
+| Region B stack | Not started |
+| Route 53 failover, the alarm, the verify script | Not started |
 
 ## Phases that follow
 
