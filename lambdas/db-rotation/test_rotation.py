@@ -72,10 +72,13 @@ class FakeSecrets:
         self.versions[ClientRequestToken] = SecretString
         self.stages[ClientRequestToken] = set(VersionStages)
 
-    def update_secret_version_stage(self, SecretId, VersionStage, MoveToVersionId, RemoveFromVersionId):
-        self.stages[RemoveFromVersionId].discard(VersionStage)
-        self.stages[MoveToVersionId].add(VersionStage)
-        self.stages[MoveToVersionId].discard("AWSPENDING")
+    def update_secret_version_stage(self, SecretId, VersionStage, MoveToVersionId=None, RemoveFromVersionId=None):
+        if RemoveFromVersionId is not None:
+            self.stages[RemoveFromVersionId].discard(VersionStage)
+        if MoveToVersionId is not None:
+            self.stages[MoveToVersionId].add(VersionStage)
+            # Not modelled: Secrets Manager does NOT drop AWSPENDING from the version that becomes current (found on the first
+            # real run), so the function has to remove it itself
 
 
 class FakeRds:
@@ -158,13 +161,41 @@ class RotationTest(unittest.TestCase):
         self.run_step("finishSecret")  # already AWSCURRENT: returns without error
         self.assertIn("AWSCURRENT", self.secrets.stages["v-new"])
 
-    def test_set_secret_can_be_repeated(self):
+    def test_set_secret_asks_rds_only_once_however_often_it_is_run(self):
         self.secrets.stages["v-new"] = {"AWSPENDING"}
         self.run_step("createSecret")
         self.run_step("setSecret")
         self.run_step("setSecret")
-        self.assertEqual(len(self.rds.modify_calls), 2)
-        self.assertEqual(self.rds.modify_calls[0], self.rds.modify_calls[1])
+        self.assertEqual(len(self.rds.modify_calls), 1)
+        self.assertIn(rotation.SET_LABEL, self.secrets.stages["v-new"])
+
+    def test_a_retry_after_a_failed_test_does_not_restart_the_password_reset(self):
+        # What the first real run showed: testSecret fails while RDS is still resetting the credentials, Secrets Manager retries the
+        # whole rotation, and without the label every retry would ask RDS for the change again, so the reset never finishes
+        self.secrets.stages["v-new"] = {"AWSPENDING"}
+        self.run_step("createSecret")
+        self.run_step("setSecret")
+        self.rds.status = "resetting-master-credentials"
+        self.rds.pending = {"MasterUserPassword": "****"}
+        with self.assertRaises(RuntimeError):
+            self.run_step("testSecret")
+        for _ in range(3):  # three retries from the top, the cluster still busy
+            self.run_step("createSecret")
+            self.run_step("setSecret")
+            with self.assertRaises(RuntimeError):
+                self.run_step("testSecret")
+        self.assertEqual(len(self.rds.modify_calls), 1)
+        self.rds.status, self.rds.pending = "available", {}  # the reset finishes
+        self.run_step("createSecret")
+        self.run_step("setSecret")
+        self.run_step("testSecret")
+        self.run_step("finishSecret")
+        self.assertEqual(len(self.rds.modify_calls), 1)
+        self.assertIn("AWSCURRENT", self.secrets.stages["v-new"])
+
+    def test_the_label_is_removed_when_the_rotation_finishes(self):
+        self.rotate()
+        self.assertNotIn(rotation.SET_LABEL, self.secrets.stages["v-new"])
 
     def test_test_secret_fails_while_the_cluster_is_not_available(self):
         self.secrets.stages["v-new"] = {"AWSPENDING"}

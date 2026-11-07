@@ -25,6 +25,12 @@ logger.setLevel(logging.INFO)
 EXCLUDED_CHARACTERS = "/@\"' \\"
 PASSWORD_LENGTH = 32
 
+# A label on the pending version that records "the password change was already requested". When testSecret fails because RDS is still
+# resetting the credentials, Secrets Manager retries the WHOLE rotation from createSecret. Without this label every retry would
+# ask RDS to change the password again, each request restarts RDS's roughly 90-second reset, and testSecret (which runs right
+# after) would never see a finished one: found on the first real run, where a rotation sat pending for 7 minutes.
+SET_LABEL = "ROTATION_SET"
+
 _secrets = None
 _rds = None
 
@@ -108,8 +114,15 @@ def _pending(arn, token):
     )
 
 
+def _stages(arn, token):
+    return _secrets_client().describe_secret(SecretId=arn).get("VersionIdsToStages", {}).get(token, [])
+
+
 def set_secret(arn, token):
-    """Change the cluster's master password to the pending one (control plane, no database login)."""
+    """Change the cluster's master password to the pending one (control plane, no database login), once per rotation."""
+    if SET_LABEL in _stages(arn, token):
+        logger.info("The change was already requested for this rotation: not asking RDS again")
+        return
     pending = _pending(arn, token)
     cluster = pending["dbClusterIdentifier"]
     _rds_client().modify_db_cluster(
@@ -117,6 +130,8 @@ def set_secret(arn, token):
         MasterUserPassword=pending["password"],
         ApplyImmediately=True,
     )
+    # Mark it only after RDS accepted the request, so a failed request is retried
+    _secrets_client().update_secret_version_stage(SecretId=arn, VersionStage=SET_LABEL, MoveToVersionId=token)
     logger.info("Master user change requested for cluster %s", cluster)
 
 
@@ -154,4 +169,9 @@ def finish_secret(arn, token):
         MoveToVersionId=token,
         RemoveFromVersionId=current_version,
     )
+    # Tidy the labels: Secrets Manager leaves AWSPENDING on the version that just became current (seen on the first real run), and
+    # the marker for "the change was already requested" has done its job
+    for label in (SET_LABEL, "AWSPENDING"):
+        if label in metadata["VersionIdsToStages"].get(token, []):
+            secrets.update_secret_version_stage(SecretId=arn, VersionStage=label, RemoveFromVersionId=token)
     logger.info("Version %s is now current", token)

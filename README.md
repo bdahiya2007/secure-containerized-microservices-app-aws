@@ -201,7 +201,7 @@ docs/
 └── iam/product-service-iam-policy.json  # scoped IAM policy that lets a PowerUserAccess role create the stack's two ECS roles
 terraform/region-b/   # DR: the recovery Region's own stack (network first; the rest follows). Not applied yet
 lambdas/
-└── db-rotation/          # DR design: Secrets Manager rotation function for the Aurora master password (Python, 14 offline tests; not deployed yet)
+└── db-rotation/          # DR design: Secrets Manager rotation function for the Aurora master password (Python, 16 offline tests; deployed and exercised in the DR session)
 scripts/
 ├── dr-probe.sh           # DR drills: a request probe that writes one CSV line per request and summarises the longest gap
 ├── render-appspec.py     # fills the task definition (and the Fargate / Fargate Spot strategy) into appspec.yaml for a deployment
