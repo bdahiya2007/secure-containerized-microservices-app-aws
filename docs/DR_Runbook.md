@@ -22,7 +22,7 @@
 
 ## 2. Drills
 
-Start the probe in a second terminal before each drill and keep it running: `scripts/dr-probe.sh https://<main name> 1800 probe.csv`. Record the wall-clock time of every action.
+Start the probe in a second terminal before each drill and keep it running: `scripts/dr-probe.sh https://<main name> 1800 probe.csv` (afterwards `scripts/dr-probe.sh --summary probe.csv` measures the outage from the timestamps). Record the wall-clock time of every action. **The commands exactly as they were run in the 2026-11-07 session, with each drill's purpose, pass criteria and results, are in [DR_Test_Results.md](DR_Test_Results.md#2-results-by-drill); this page is the plan, updated after the session with what turned out to be needed.**
 
 **Drill 1: Region B works before any failover.** `curl https://<usw2 name>/health` and `/products` answer 200 over HTTPS (the task reads the replica secret and the secondary's reader endpoint). Look at the replication lag now: see section 3.
 
@@ -35,14 +35,24 @@ aws rds switchover-global-cluster --region us-east-1 --global-cluster-identifier
 ```
 Wait until the Region B cluster is the writer (`aws rds describe-global-clusters`), note the time, then switch back the same way with the Region A cluster as the target. The probe (which only reads) should show little or no gap.
 
-**Drill 4: a DNS failover rehearsal (no database change).** Add the SECONDARY record (`enable_failover_record = true` in the Region B stack, apply). Then stop Region A's service: `aws ecs update-service --region us-east-1 --cluster product-service-cluster --service product-service --desired-count 0`. After about 3 minutes the alarm `product-service-no-running-tasks` goes to ALARM, Route 53's health check turns unhealthy, and the main name starts answering with Region B (the probe's remote IP changes, and **HTTPS must still verify**: Region B's certificate covers the main name). Restore with `--desired-count 2`. Setting the alarm state by hand (`aws cloudwatch set-alarm-state`) is only a quick look: the alarm re-evaluates every minute and goes back, so the stopped service is the reliable rehearsal.
+**Drill 4: a DNS failover rehearsal (no database change).** Add the SECONDARY record (`enable_failover_record = true` in the Region B stack, apply). Learn each load balancer's addresses with `dig +short`. Let Region A's autoscaling hold zero tasks, then stop the service:
+```bash
+aws application-autoscaling register-scalable-target --region us-east-1 --service-namespace ecs \
+  --resource-id service/product-service-cluster/product-service --scalable-dimension ecs:service:DesiredCount --min-capacity 0 --max-capacity 4
+aws ecs update-service --region us-east-1 --cluster product-service-cluster --service product-service --desired-count 0
+```
+Expect the main name to be answered by Region B about **one minute** later (the alias's target-health evaluation; measured 42 to 56 seconds), with HTTPS still valid (Region B's certificate covers the main name). Restore with the autoscaling minimum back to 2 and `--desired-count 2`. Setting the alarm state by hand (`aws cloudwatch set-alarm-state`) is only a quick look: it re-evaluates and goes back, so the stopped service is the reliable rehearsal.
 
-**Drill 5: the database failover (data loss allowed).** Record the current replication lag first (section 3). Then:
+**Drill 4b: the alarm-fed health check.** The same outage, kept up for **9 minutes**, to exercise the backstop for a Region or load-balancer outage. Measured: the Route 53 health check (which follows the alarm's metric data) turned unhealthy after about 5 minutes and the alarm's own state changed after 8 min 41 s (`product-service-no-running-tasks`: Container Insights `RunningTaskCount` below 1, 3 of 3 minutes). Do **not** rely on the alarm state to see a failover coming. Collect the evidence read-only: `describe-alarm-history`, the metric data and `get-metric-widget-image`.
+
+**Drill 5: the database failover (data loss allowed), with a measured data loss.** Record the lag first (section 3). Start a write load in Region A that runs **through** the failover and logs a counter every 100 inserts (the script is in [DR_Test_Results.md](DR_Test_Results.md#drill-5-database-failover-with-data-loss-allowed)). About 30 seconds later:
 ```bash
 aws rds failover-global-cluster --region us-west-2 --global-cluster-identifier product-service-global \
   --target-db-cluster-identifier <the Region B cluster ARN> --allow-data-loss
 ```
-Wait for the Region B cluster to become the writer, scale the Region B service up (`aws ecs update-service --region us-west-2 --cluster product-service-b-cluster --service product-service-b --desired-count 2`), and check that `https://<main name>/products` answers. **Fail back** (a switchover with Region A as the target) before any Terraform command: Terraform expects Region A to be the writer.
+Poll `writer` until it prints Region B, and read the clusters' events for the true promotion time (the control plane's writer flag flips about 15 seconds before the instance is ready). Scale the Region B service up (`aws ecs update-service --region us-west-2 --cluster product-service-b-cluster --service product-service-b --desired-count 2`) and check that `https://<main name>/products` answers. **Measure the data loss:** the load task's last "acked N" / "connection error after N" line minus the test rows counted in Region B (`curl https://<usw2 name>/products`, count the rows whose description is `rpo test`). Measured: 0 rows lost at about 520 writes a second.
+
+**Then wait for the resync before failing back.** After an unplanned failover AWS rebuilds the old primary as a secondary (13 min 20 s here); a switchover is refused with `the target DB cluster is in the resyncing state` until the Region A cluster's events show "Finished resynchronizing". Allow at least 15 to 30 minutes. Then fail back (a switchover with Region A as the target, sent to Region B's Region): `aws rds switchover-global-cluster --region us-west-2 ... --target-db-cluster-identifier <the Region A cluster ARN>`. **Run no Terraform command until Region A is the writer again.** Clean up: scale Region B to 1, delete the test rows with a one-off task, and delete the `rds:unplanned-global-failover-...` snapshot AWS left behind at teardown.
 
 ## 3. Measuring
 
