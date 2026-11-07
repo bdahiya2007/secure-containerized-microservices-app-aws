@@ -93,7 +93,7 @@ resource "aws_iam_role_policy" "task_read_db_secret" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = aws_db_instance.main.master_user_secret[0].secret_arn
+      Resource = local.db_secret_arn
     }]
   })
 }
@@ -125,12 +125,12 @@ resource "aws_ecs_task_definition" "app" {
     portMappings           = [{ containerPort = 3000, protocol = "tcp" }]
 
     environment = [
-      { name = "DB_HOST", value = aws_db_instance.main.address },
-      { name = "DB_PORT", value = tostring(aws_db_instance.main.port) },
+      { name = "DB_HOST", value = local.db_host },
+      { name = "DB_PORT", value = tostring(local.db_port) },
       { name = "DB_NAME", value = var.db_name },
       { name = "DB_SSL", value = "true" },
       # The name (ARN) of the secret, not its value. The app fetches the username and password with the task role.
-      { name = "DB_SECRET_ARN", value = aws_db_instance.main.master_user_secret[0].secret_arn },
+      { name = "DB_SECRET_ARN", value = local.db_secret_arn },
       { name = "AWS_REGION", value = var.aws_region },
     ]
 

@@ -48,6 +48,9 @@ skip-check:
   # Deletion protection is off so a demo can be destroyed with terraform destroy. Turn it on for production.
   - CKV_AWS_150
   - CKV_AWS_293
+  # The Aurora cluster (terraform/aurora.tf) has automated backups with 7-day retention and point-in-time restore. A separate
+  # AWS Backup plan adds a vault, a role and cost for a demo whose data is seed data that the migration task reloads.
+  - CKV2_AWS_8
   # RDS monitoring extras (enhanced monitoring, Performance Insights, log exports, query logging) add
   # cost and setup for no benefit at demo size.
   - CKV_AWS_118

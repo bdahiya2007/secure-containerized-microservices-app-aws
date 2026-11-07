@@ -68,7 +68,7 @@ With retries and extras, about $3 to $4. Leftover keys and secrets cost cents. T
 | Piece | Status |
 |---|---|
 | Rotation function and tests (`lambdas/db-rotation/`), run in CI, scanned by Semgrep (Python rules) | **Written and tested offline** |
-| Aurora replacing RDS in Region A, the self-managed secret and replica, the rotation schedule and permissions (Terraform; raises the minimum Terraform version to 1.11) | Next |
+| Aurora replacing RDS in Region A, the self-managed secret and replica, the rotation function's deployment, schedule and permissions (`terraform/aurora.tf`, switch `enable_aurora`, off by default; the minimum Terraform version is now 1.11 and the `archive` provider is added) | **Written, validated and planned offline** (plan with the switch off: 68 to add; on: 77 to add; no password in the plan). **Not applied.** **Confirmed 2026-11-07:** Aurora PostgreSQL `18.6` (the default and the newest 18.x minor) is offered in us-east-1 and us-west-2 with Global Database and Serverless v2 support, and the scans pass in CI. **To confirm before applying:** the `moved` block against a real RDS state. `verify-deployment.sh` does not know about Aurora yet (a later piece) |
 | Region B stack | Not started |
 | Route 53 failover, the alarm, the verify script | Not started |
 

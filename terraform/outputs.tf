@@ -7,11 +7,12 @@ output "ecr_repository_url" {
 }
 
 output "rds_endpoint" {
-  value = aws_db_instance.main.address
+  description = "The database endpoint the app uses (the RDS instance, or the Aurora cluster with enable_aurora)"
+  value       = local.db_host
 }
 
 output "db_secret_arn" {
-  value = aws_db_instance.main.master_user_secret[0].secret_arn
+  value = local.db_secret_arn
 }
 
 output "log_bucket" {
@@ -59,4 +60,19 @@ output "codedeploy_deployment_group_name" {
 output "app_url" {
   description = "Where the app is served: https://app_domain with enable_https, otherwise the load balancer's own HTTP address"
   value       = var.enable_https ? "https://${var.app_domain}" : "http://${aws_lb.app.dns_name}"
+}
+
+output "global_cluster_id" {
+  description = "The Aurora global cluster (empty unless enable_aurora); the Region B stack attaches its secondary cluster to it"
+  value       = one(aws_rds_global_cluster.main[*].id)
+}
+
+output "aurora_cluster_arn" {
+  description = "The Region A Aurora cluster (empty unless enable_aurora)"
+  value       = one(aws_rds_cluster.primary[*].arn)
+}
+
+output "db_rotation_function" {
+  description = "The Secrets Manager rotation function for the Aurora master password (empty unless enable_aurora)"
+  value       = one(aws_lambda_function.db_rotation[*].function_name)
 }
