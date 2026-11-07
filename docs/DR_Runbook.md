@@ -26,7 +26,7 @@ Start the probe in a second terminal before each drill and keep it running: `scr
 
 **Drill 1: Region B works before any failover.** `curl https://<usw2 name>/health` and `/products` answer 200 over HTTPS (the task reads the replica secret and the secondary's reader endpoint). Look at the replication lag now: see section 3.
 
-**Drill 2: a password rotation end to end.** Rotate by hand (`aws secretsmanager rotate-secret --secret-id product-service/aurora-master`), watch the rotation function's log group, and send requests throughout, as in the earlier RDS tests ([Secrets.md](Secrets.md)). Confirm the app keeps serving and that the replica secret in Region B got the new version.
+**Drill 2: a password rotation end to end.** Rotate by hand (`aws secretsmanager rotate-secret --secret-id product-service/aurora-master`), watch the rotation function's log group, and send requests throughout, as in the earlier RDS tests ([Secrets.md](Secrets.md)). Expect it to take about 2 to 4 minutes (RDS resets the credentials for about 90 seconds), with one expected "not applied yet" error from `testSecret` in the log before it succeeds. **If the secret is still `AWSPENDING` after 5 minutes, stop**: that is the retry livelock the first real run found; check `aws rds describe-events` for repeated "Reset master credentials" events. Confirm the app keeps serving and that the replica secret in Region B got the new version.
 
 **Drill 3: a planned switchover, and back (RPO 0).**
 ```bash
