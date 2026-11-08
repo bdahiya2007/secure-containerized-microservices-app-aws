@@ -14,7 +14,11 @@ ALB access logs, CloudTrail, RDS logs and S3 access logs (the last took about 49
 
 ## Architecture
 
-The complete picture, with every AWS service, the request and deployment flows, and how least privilege and defense in depth are applied end to end, is in **[docs/Architecture.md](docs/Architecture.md)**. The short version:
+The complete picture, with every AWS service, the request and deployment flows, and how least privilege and defense in depth are applied end to end, is in **[docs/Architecture.md](docs/Architecture.md)**. The complete architecture, including the disaster-recovery Region:
+
+[![Complete architecture with AWS Architecture Icons](docs/images/architecture-complete.png)](docs/images/architecture-complete.svg)
+
+The Region B, Aurora, HTTPS and failover parts are Terraform switches (`enable_https`, `enable_aurora`, `enable_dr_replica`, `enable_dr_failover`) that default to off; the default deployment is the Region A part. Icons: AWS Architecture Icons. The short version of the default configuration:
 
 ```mermaid
 flowchart LR
