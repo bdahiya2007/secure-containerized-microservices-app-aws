@@ -468,6 +468,8 @@ Done on 2026-11-08 (UTC), after the drills and the architecture and security doc
 
 **Route 53 check:** the zone's record list was read after the destroy. The `products.` and `usw2.` records, the failover records and their certificate-validation records are gone; only records for other sites in the same zone remain (the apex and `www`, `orders.`, and their certificate validation records).
 
-**Not yet confirmed at the time of writing:** deletion of the two saved plan files, restoring `demo.auto.tfvars`, and the next day's bill. KMS keys show as pending deletion for 7 days, which is expected.
+**Cleanup done:** all the saved plan files from the session were deleted (they hold an address and account details), and `demo.auto.tfvars` was restored to its pre-session values (the DR switches removed; CloudTrail, S3 access logging and RDS logs back on).
+
+**The bill is not yet confirmed.** Cost Explorer was queried on 2026-11-08 and the session's usage had not posted yet (it lags by many hours; only an unrelated small charge showed for 2026-11-07). Check again in a day or two and compare with the estimate of about $0.35 to $0.50 an hour. KMS keys show as pending deletion for 7 days, which is expected.
 
 **Order that worked:** Region B first, then the main stack; the destroys took about 20 minutes each, almost all of it the Aurora instance. Nothing needed a retry.
