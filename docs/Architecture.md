@@ -421,3 +421,7 @@ The overview is tall because it shows every connection, so open the image at ful
 | [DR_Test_Results.md](DR_Test_Results.md) | What the drills measured, every issue with cause and fix, a troubleshooting guide, the teardown |
 | [DR_Design_Decisions.md](DR_Design_Decisions.md) | The design decisions behind the Aurora Global Database and the pilot-light Region B |
 | [Security_Review_DR.md](Security_Review_DR.md) | Security read-through after the DR build: controls, open points, leftovers |
+| [THREAT_MODEL.md](THREAT_MODEL.md) | STRIDE threat model with controls, residual risk and open items |
+| [Application_Security_Testing.md](Application_Security_Testing.md) | Security scanning tools, findings and remediation |
+| [SECRET_SCANNING.md](SECRET_SCANNING.md) | The secret scanner: rules, hook, CI check and limits |
+| [FAQ.md](FAQ.md) | Questions and answers on the design, security, releases, scaling, DR, cost and operation |

@@ -23,8 +23,7 @@ Other modes: `--all-tracked` scans every tracked file, `--range BASE..HEAD` scan
 false positive can be accepted by putting `secret-scan: allow` on that line. To block values specific to you (your account ID or email), list them one per line in
 `~/.config/secret-scan/literals`; that file stays outside the repository.
 
-**Current limit:** the hook is local, so it can be skipped or never enabled. A CI job to re-check every pull request is on the
-[roadmap](README.md#known-limitations-and-roadmap).
+**Current limit:** the hook is local, so it can be skipped (`--no-verify`) or never enabled. The `Scan for secrets and sensitive data` pull request check re-runs the scan on every commit and every tracked file and is required for `main`, so it is the real backstop; GitHub secret scanning with push protection is a second layer. The details and known limits are in [docs/SECRET_SCANNING.md](docs/SECRET_SCANNING.md).
 
 ## How secrets are handled in the design
 

@@ -205,6 +205,10 @@ docs/
 ├── images/                       # CloudWatch dashboard charts from the AWS test (8) and architecture diagram images (the complete AWS Architecture Icons diagram plus 6 Mermaid renders) and DR evidence charts
 ├── DR_Runbook.md                 # the DR session plan and the whole deploy, test, drill and destroy order, with pass criteria
 ├── Security_Review_DR.md         # security read-through after the DR build: controls, open points, leftovers a failover creates
+├── THREAT_MODEL.md               # STRIDE threat model: assets, trust boundaries, 28 threats with controls, residual risk and open items
+├── Application_Security_Testing.md # the tools used (Semgrep, CodeQL, Trivy, Checkov, npm audit, ECR scan), their findings and how each was fixed
+├── SECRET_SCANNING.md            # what the secret scanner blocks, how to use it, its limits
+├── FAQ.md                        # questions and answers on the design, security, releases, scaling, DR, cost and operation
 ├── vulnerability-scan-report.md  # image and Terraform scan findings, remediation, before and after, and the 2026-11-08 re-scan
 └── iam/product-service-iam-policy.json  # scoped IAM policy that lets a PowerUserAccess role create the stack's two ECS roles
 terraform/region-b/   # DR: the recovery Region's own stack (network, ALB, ECS service, Aurora secondary, certificate, failover record); applied and drilled on 2026-11-07, then destroyed
