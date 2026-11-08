@@ -120,11 +120,12 @@ flowchart LR
 | `backend.tf` | S3 remote state with native locking; the bucket name comes from `backend.hcl` (git-ignored, copy `backend.hcl.example`) |
 | `variables.tf` | Input variables |
 | `network.tf` | VPC, public/private subnets, IGW, NAT, route tables, security groups |
-| `aurora.tf` | Only with `enable_aurora` (off by default): the Aurora Global Database primary (Serverless v2), the self-managed secret and its optional recovery-Region replica, and the password rotation function with its role and schedule. Written for the [DR design](../docs/DR_Design_Decisions.md), not yet applied |
+| `aurora.tf` | Only with `enable_aurora` (off by default): the Aurora Global Database primary (Serverless v2), a customer-managed KMS key for the cluster and the secret (added in PR #53, **not yet applied**), the self-managed secret and its optional recovery-Region replica, and the password rotation function with its role and schedule. Written for the [DR design](../docs/DR_Design_Decisions.md); applied and drilled on 2026-11-07, except the key |
+| `failover.tf` | Only with `enable_dr_failover`: the CloudWatch alarm on the service's running tasks and the Route 53 health check that follows it, behind the PRIMARY record (the SECONDARY record is in `region-b/`) |
 | `dns.tf` | Only with `enable_https`: the ACM certificate, its validation records and the Route 53 alias record (the hosted zone is only read) |
-| `region-b/` | Separate stack with its own state for the recovery Region (network and Aurora secondary so far); see its [README](region-b/README.md). Not applied yet |
+| `region-b/` | Separate stack with its own state for the recovery Region (network, ALB, one ECS task, Aurora secondary, certificate and the SECONDARY record); see its [README](region-b/README.md). Applied and drilled on 2026-11-07, then destroyed |
 | `rds.tf` | DB subnet group and PostgreSQL 18 instance (password managed by Secrets Manager) |
-| `ecr.tf` | ECR repository and lifecycle policy |
+| `ecr.tf` | ECR repository and lifecycle policy, and (with `enable_dr_replica`) the registry-wide replication rule to the recovery Region, which replaces any existing registry replication setting |
 | `ecs.tf` | Log group, cluster and its capacity providers (`FARGATE`, `FARGATE_SPOT`), IAM roles, task definition, service, ALB, target group, listener |
 | `logging.tf` | Central private, encrypted S3 log bucket with per-prefix expiry, a bucket policy with one statement per writer, ALB logs (always on), and the optional CloudTrail trail and S3 access logging (switches) |
 | `monitoring.tf` | CloudWatch dashboard: ECS reserved and utilized CPU and memory, desired, running and pending task counts, ALB request count, 4XX and 5XX errors, response time and target health |
@@ -170,7 +171,8 @@ flowchart LR
 | `aurora_min_capacity` / `aurora_max_capacity` | `0.5` / `4` | Serverless v2 capacity range in ACUs. AWS recommends 8 for a global primary; the drill measures replication lag at this low setting |
 | `db_password_version` | `1` | Version of the initial write-only password; bump it to set a fresh one (rotation changes the password on its own) |
 | `db_rotation_days` | `7` | How often Secrets Manager rotates the Aurora password |
-| `dr_region` / `enable_dr_replica` | `us-west-2` / `false` | The recovery Region, and whether the database secret is replicated there (needed by the Region B stack) |
+| `dr_region` / `enable_dr_replica` | `us-west-2` / `false` | The recovery Region, and whether the database secret and the ECR images are replicated there (needed by the Region B stack; the image replication also needs `enable_aurora`) |
+| `enable_dr_failover` | `false` | Route 53 failover routing for `app_domain`: this Region's record becomes the PRIMARY, with a health check that follows the CloudWatch alarm on the running tasks. The Region B stack creates the SECONDARY. Needs `enable_https` |
 
 ## Usage
 
@@ -232,6 +234,7 @@ push the image, then run the full apply; see [docs/ECR_Runbook.md](../docs/ECR_R
 | `rds_endpoint` | Database host name (the RDS instance, or the Aurora cluster with `enable_aurora`) |
 | `db_secret_arn` | Secrets Manager secret holding the DB credentials |
 | `db_secret_name`, `global_cluster_id`, `global_cluster_engine_version`, `aurora_cluster_arn`, `db_rotation_function` | Only with `enable_aurora`: what the Region B stack reads from this stack's state, and the rotation function's name |
+| `failover_health_check_id`, `failover_alarm_name` | Only with `enable_dr_failover`: the Route 53 health check behind the PRIMARY record and the alarm it follows |
 | `log_bucket` | Central S3 log bucket (prefixes `alb/`, `cloudtrail/`) |
 | `s3_access_log_bucket` | Separate bucket for the central bucket's S3 server access logs (empty when `enable_s3_access_logging` is off) |
 | `dashboard_url` | Console link to the CloudWatch dashboard |
@@ -260,8 +263,8 @@ push the image, then run the full apply; see [docs/ECR_Runbook.md](../docs/ECR_R
   `logging.s3.amazonaws.com` write, and only for the central bucket and this account. S3 access logging doesn't check its permissions when it is created, so a wrong policy fails silently: check that files appear.
   RDS logs go to CloudWatch Logs (`enable_rds_logs`), not S3, because RDS can't export to S3 directly; sending them on to the bucket (CloudWatch Logs to Firehose to S3) is planned but not built.
 - **Monitoring and the Lambda note:** the dashboard charts what exists for a Fargate service. `CPUReservation` and `MemoryReservation` are only published for EC2-backed ECS clusters (confirmed: zero such metrics on this
-  cluster), so it uses Container Insights' `CpuReserved`, `MemoryReserved` and `DesiredTaskCount` instead, plus ALB `RequestCount` and `HTTPCode_Target_4XX_Count`. **There is no Lambda function in this project**, so the Lambda
-  `Invocations` and `Errors` metrics and X-Ray tracing on a Lambda function don't apply and were not added; the reasoning and what a Lambda would need are in the header comment of `monitoring.tf`.
+  cluster), so it uses Container Insights' `CpuReserved`, `MemoryReserved` and `DesiredTaskCount` instead, plus ALB `RequestCount` and `HTTPCode_Target_4XX_Count`. **The only Lambda function is the optional password-rotation function (`enable_aurora`)**, so the dashboard has no Lambda panel and the default deployment has none at all; the Lambda
+  `Invocations` and `Errors` metrics were not added; the reasoning and what a Lambda would need are in the header comment of `monitoring.tf`.
 - **Auto Scaling:** two target-tracking policies on one scalable target. They add tasks quickly (60-second cooldown) and remove them slowly (300 seconds), so brief dips don't shrink the service. The service
   ignores `desired_count` after creation so Terraform doesn't fight the scaler. The scaling alarms are created and managed by Application Auto Scaling (about $0.10 per alarm per month, a few cents for a short test),
   and the service-linked role it needs is created by AWS automatically. The 4-task ceiling keeps database connections within bounds (10 per task).
@@ -276,7 +279,7 @@ push the image, then run the full apply; see [docs/ECR_Runbook.md](../docs/ECR_R
 ## Cost
 
 Roughly $0.14/hour (about $3.30/day) while running; the NAT gateway and ALB bill even with no
-traffic. Run `terraform destroy` when finished.
+traffic. Run `terraform destroy` when finished. With the whole DR design on (Aurora, Region B and failover) the estimate was about $0.35 to $0.50 an hour, for the one paid session ([docs/DR_Test_Results.md](../docs/DR_Test_Results.md)).
 
 ## Production hardening
 
@@ -297,6 +300,8 @@ terraform -chdir=terraform destroy
 
 `plan -destroy` previews what will be deleted; `destroy` asks you to type `yes`. The database is deleted with its data
 (`skip_final_snapshot = true`), and the ECR repository is deleted with its images (`force_delete = true`), so push the image again after the next apply.
+
+**With the DR design on**, destroy the Region B stack first (`terraform -chdir=terraform/region-b destroy`), then this one; fail back first if Region B is the database writer. The full order, the leftover checks and the failover snapshot are in [docs/DR_Runbook.md](../docs/DR_Runbook.md), section 5.
 
 ## Remote state
 
