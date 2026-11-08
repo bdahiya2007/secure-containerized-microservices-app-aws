@@ -120,6 +120,8 @@ If you must reach the service from several places or from a network whose addres
 
 ## 4. Verify
 
+> **With disaster recovery on**, Region B is a separate stack (`terraform/region-b`) that this script does not check. After the main stack is verified, check Region B directly (`curl https://<usw2 name>/health` and `/products` answer 200) and see [DR_Runbook.md](DR_Runbook.md) for the drills and the whole deploy-test-drill-destroy order (section 7).
+
 ### Automated: 35 read-only checks
 
 ```bash
@@ -227,6 +229,8 @@ aws cloudwatch get-dashboard --dashboard-name $PROJECT --query DashboardBody --o
 The dashboard is in the Terraform output `dashboard_url`. More on logging in [Logging_Runbook.md](Logging_Runbook.md).
 
 ## 7. Tear down
+
+> **With disaster recovery on**, destroy the Region B stack (`terraform -chdir=terraform/region-b destroy`) **before** the main stack, fail back first if Region B is the database writer, delete the failover snapshot, and check both Regions for leftovers: [DR_Runbook.md](DR_Runbook.md), section 5.
 
 Costs roughly $0.16 to $0.20 an hour while running (NAT gateway, ALB, RDS, Fargate).
 

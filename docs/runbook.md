@@ -397,6 +397,8 @@ they pick up the new value: `aws ecs update-service ... --force-new-deployment` 
 
 ## 10. Tear down
 
+> **With disaster recovery on** (`enable_dr_replica` or `enable_dr_failover`, a Region B stack in `terraform/region-b`): destroy **Region B first** (`terraform -chdir=terraform/region-b destroy`), and only then the main stack below. If a failover left Region B as the database writer, fail back first. Afterwards delete the `rds:unplanned-global-failover-...` snapshot a failover leaves behind, and run the leftover checks in **both** Regions (us-east-1 and us-west-2). The full steps are in [DR_Runbook.md](DR_Runbook.md), section 5, and the whole deploy-test-drill-destroy order is in section 7.
+
 ```bash
 terraform -chdir=terraform plan -destroy
 terraform -chdir=terraform destroy
