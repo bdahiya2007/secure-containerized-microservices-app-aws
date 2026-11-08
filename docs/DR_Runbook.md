@@ -91,7 +91,7 @@ Save the probe CSV and its summary, the timeline of your actions, the lag readin
    done
    ```
    and check the Route 53 zone for the app names (`aws route53 list-resource-record-sets --hosted-zone-id <zone id>`): only the records you meant to keep.
-4. **Delete the snapshot a failover leaves behind.** An unplanned global failover creates a cluster snapshot named `rds:unplanned-global-failover-...` that Terraform does not own, in the Region whose cluster was demoted. Find it with the `describe-db-cluster-snapshots` line above (it is the one entry that remains) and remove it: `aws rds delete-db-cluster-snapshot --region <region> --db-cluster-snapshot-identifier <name>`. Look at its name before you delete it.
+4. **Delete the snapshot a failover leaves behind, if it is there.** (On 2026-11-08 the lists were empty after the destroy: it had gone with the cluster. Check anyway.) An unplanned global failover creates a cluster snapshot named `rds:unplanned-global-failover-...` that Terraform does not own, in the Region whose cluster was demoted. Find it with the `describe-db-cluster-snapshots` line above (it is the one entry that remains) and remove it: `aws rds delete-db-cluster-snapshot --region <region> --db-cluster-snapshot-identifier <name>`. Look at its name before you delete it.
 5. **Restore `demo.auto.tfvars`** to its normal values (the drill session turned on CloudTrail, S3 access logs and RDS logs; the copy kept before the session has the originals), so that the next `plan` shows what you expect.
 6. Delete the saved plan files (they hold your address and account details), and check the next day's bill.
 

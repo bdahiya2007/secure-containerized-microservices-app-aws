@@ -1,6 +1,6 @@
 # Disaster recovery: what was built, what the drills showed, what went wrong, and how to troubleshoot
 
-**Status: one paid session on 2026-11-07; all drills recorded.** Drills 1 to 5 are below, with CloudWatch evidence (alarm state history, per-minute data and charts) for 4b and 5. The stack is destroyed after the session; the teardown is recorded at the end of section 2. Everything here is measured from the live session unless it says "hypothesis". Costs are estimates; Cost Explorer lags by many hours.
+**Status: one paid session on 2026-11-07; all drills recorded.** Drills 1 to 5 are below, with CloudWatch evidence (alarm state history, per-minute data and charts) for 4b and 5. The stack is destroyed after the session; the teardown is recorded in [section 6](#6-teardown-and-leftovers). Everything here is measured from the live session unless it says "hypothesis". Costs are estimates; Cost Explorer lags by many hours.
 
 How to read it: [the session in one table](#1-the-session-at-a-glance), [the results of each drill](#2-results-by-drill), [every problem, with cause and fix](#3-issues-found-and-how-they-were-resolved), [a troubleshooting guide by symptom](#4-troubleshooting-guide), and [what is still unproven](#5-what-is-still-unproven). The plan the session followed is [DR_Runbook.md](DR_Runbook.md), the design is [DR_Design_Decisions.md](DR_Design_Decisions.md).
 
@@ -451,3 +451,25 @@ Commands use placeholders in angle brackets. Run everything for Region B with `-
 - **Faster failover after a database failover** (issue 15): the two open improvements have not been tried.
 - **The scheduled 7-day rotation** (only manual rotations were run).
 - **A real Region outage:** nothing here can simulate one; the drills stop services or move roles, which is the closest available.
+
+## 6. Teardown and leftovers
+
+Done on 2026-11-08 (UTC), after the drills and the architecture and security documentation, following [DR_Runbook.md](DR_Runbook.md), section 5. The owner ran each command; the outputs below are what they reported.
+
+**Before:** the global database was checked first: Region A's cluster was the writer and Region B's the secondary, so no fail-back was needed.
+
+| Step | Result |
+|---|---|
+| Region B stack: `plan -destroy -out`, then `apply` | Plan: 46 to destroy, 0 to add, 0 to change, with only Region B outputs removed. Apply: **46 destroyed.** The Aurora secondary's instance took **13 min 13 s**, its cluster **2 min 12 s**; the key, subnets, security groups and VPC went in seconds |
+| Main stack: `plan -destroy -out`, then `apply` | Plan: 71 to destroy, 0 to add, 0 to change, with only main-stack outputs removed. Apply: **71 destroyed.** The Aurora primary's instance took **8 min 11 s**, its cluster **2 min 2 s**, the global cluster 3 s. **No `ResourceInUse` error** on the green target group this time (the listener dependency added in PR #34 worked). The log bucket and its contents were removed with it |
+| Leftover check, both Regions | NAT gateways 0; load balancers none; Elastic IPs 0; Aurora clusters, instances and cluster snapshots none; ECR repositories none; ECS clusters none; Secrets Manager secrets none; `/ecs/product-service` log groups none. The two ACM certificates left in us-east-1 belong to other setups, not this project |
+
+**The failover snapshot was not there.** The runbook says to delete the `rds:unplanned-global-failover-...` snapshot (created at 23:16:27 during Drill 5). The cluster snapshot lists in both Regions were empty at the check, so there was nothing to delete: it was removed together with the old primary cluster, or earlier. This was not investigated further. The runbook keeps the instruction because the listing is the way to be sure.
+
+**Route 53 check:** the zone's record list was read after the destroy. The `products.` and `usw2.` records, the failover records and their certificate-validation records are gone; only records for other sites in the same zone remain (the apex and `www`, `orders.`, and their certificate validation records).
+
+**Cleanup done:** all the saved plan files from the session were deleted (they hold an address and account details), and `demo.auto.tfvars` was restored to its pre-session values (the DR switches removed; CloudTrail, S3 access logging and RDS logs back on).
+
+**The bill is not yet confirmed.** Cost Explorer was queried on 2026-11-08 and the session's usage had not posted yet (it lags by many hours; only an unrelated small charge showed for 2026-11-07). Check again in a day or two and compare with the estimate of about $0.35 to $0.50 an hour. KMS keys show as pending deletion for 7 days, which is expected.
+
+**Order that worked:** Region B first, then the main stack; the destroys took about 20 minutes each, almost all of it the Aurora instance. Nothing needed a retry.
