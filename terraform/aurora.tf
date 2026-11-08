@@ -15,6 +15,44 @@ ephemeral "aws_secretsmanager_random_password" "db" {
   exclude_characters = "/@\"' \\"
 }
 
+# ---- A customer-managed key for the Region A cluster's storage and the database secret ----
+# (The Region B cluster has its own key in terraform/region-b: a global database cannot share one key between Regions.)
+# Written out instead of left to the default, with the same effect: the account's own IAM policies decide who may use the key.
+# The task role, the migration task and the rotation function are given kms:Decrypt (and the rotation function also
+# kms:GenerateDataKey) in their own policies, only through Secrets Manager. No other principal is named and nothing is public.
+data "aws_iam_policy_document" "aurora_key" {
+  #checkov:skip=CKV_AWS_356,CKV_AWS_109,CKV_AWS_111: this is a KMS key policy, where Resource "*" means only this key, and the account-root statement is the AWS default that hands access decisions to IAM; the IAM-policy rules do not fit a key policy
+  count = var.enable_aurora ? 1 : 0
+
+  statement {
+    sid       = "EnableAccountAdministration"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+}
+
+resource "aws_kms_key" "aurora" {
+  count = var.enable_aurora ? 1 : 0
+
+  description             = "Aurora primary cluster storage and the database secret (Region A)"
+  enable_key_rotation     = true
+  deletion_window_in_days = 7 # the shortest, so a demo rebuild is not blocked for long
+  policy                  = data.aws_iam_policy_document.aurora_key[0].json
+}
+
+resource "aws_kms_alias" "aurora" {
+  count = var.enable_aurora ? 1 : 0
+
+  name          = "alias/${var.project_name}-aurora"
+  target_key_id = aws_kms_key.aurora[0].key_id
+}
+
 # ---- The global cluster, its Region A primary cluster and its serverless instance ----
 resource "aws_rds_global_cluster" "main" {
   count = var.enable_aurora ? 1 : 0
@@ -46,6 +84,7 @@ resource "aws_rds_cluster" "primary" {
   global_cluster_identifier = aws_rds_global_cluster.main[0].id
   database_name             = var.db_name
   storage_encrypted         = true
+  kms_key_id                = aws_kms_key.aurora[0].arn
 
   master_username = var.db_username
   # Write-only: sent to RDS and then forgotten. The rotation function changes the real password later, and the same
@@ -101,11 +140,14 @@ resource "aws_secretsmanager_secret" "db" {
 
   name        = "${var.project_name}/aurora-master"
   description = "Aurora master credentials for ${var.project_name}. Self-managed: rotated by ${var.project_name}-db-rotation."
+  kms_key_id  = aws_kms_key.aurora[0].arn
 
   # Demo: delete at once on destroy, so a rebuilt stack can reuse the name (the default keeps it for 30 days)
   recovery_window_in_days = 0
 
-  # Copies of every version in the recovery Region, for the Region B stack
+  # Copies of every version in the recovery Region, for the Region B stack. The copy is encrypted with that Region's
+  # AWS-managed Secrets Manager key: a customer-managed key there would have to exist before this stack is applied,
+  # and it is created later by the Region B stack.
   dynamic "replica" {
     for_each = var.enable_dr_replica ? [var.dr_region] : []
     content {
@@ -195,6 +237,16 @@ resource "aws_iam_role_policy" "db_rotation" {
         Effect   = "Allow"
         Action   = "secretsmanager:GetRandomPassword"
         Resource = "*"
+      },
+      {
+        # Only through Secrets Manager, and only this key: the secret is encrypted with it
+        Sid      = "UseTheSecretKey"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource = aws_kms_key.aurora[0].arn
+        Condition = {
+          StringEquals = { "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com" }
+        }
       },
       {
         Sid      = "OneCluster"
