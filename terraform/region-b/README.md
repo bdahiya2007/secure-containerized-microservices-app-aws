@@ -1,15 +1,15 @@
 # Region B: the recovery Region (pilot light)
 
 A separate Terraform stack with its own state, for the disaster recovery design in
-[docs/DR_Design_Decisions.md](../../docs/DR_Design_Decisions.md). **Written in pieces; nothing here is applied yet.**
+[docs/DR_Design_Decisions.md](../../docs/DR_Design_Decisions.md). **Applied and drilled once on 2026-11-07 ([results](../../docs/DR_Test_Results.md)), then destroyed.**
 
 | Piece | What | Status |
 |---|---|---|
 | 3a | The network: VPC, two zones of public and private subnets, one NAT gateway, the S3 gateway endpoint, and the ALB, app and database security groups | **This folder** |
 | 3b | The database: a KMS key, the Aurora secondary cluster and its serverless instance (`database.tf`; reads the main stack's outputs in `main-state.tf`) | **Added** |
-| 3c | The app: Region B's ECR repository, the load balancer with its own certificate and name (`dns.tf`, `alb.tf`), the ECS cluster and one task (`ecs.tf`); the main stack gets the ECR replication rule | **Added** (not applied) |
+| 3c | The app: Region B's ECR repository, the load balancer with its own certificate and name (`dns.tf`, `alb.tf`), the ECS cluster and one task (`ecs.tf`); the main stack gets the ECR replication rule | **Added** (applied and drilled on 2026-11-07) |
 
-## Use (once all pieces exist)
+## Use
 
 ```bash
 cd terraform/region-b
