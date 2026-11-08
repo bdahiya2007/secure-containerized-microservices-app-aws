@@ -3,7 +3,7 @@
 
 One scanner, used in three places so the rules never drift apart:
   * the git pre-commit hook (.githooks/pre-commit)      -> --staged
-  * a CI job (planned, not yet added to this repository) -> --all-tracked and --range BASE..HEAD
+  * the CI job in .github/workflows/validate.yml        -> --all-tracked and --range BASE..HEAD
   * by hand                                             -> any mode
 
 Only content that is (or is about to be) committed is scanned, never git-ignored local files.
