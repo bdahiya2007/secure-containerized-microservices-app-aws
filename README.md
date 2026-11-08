@@ -58,11 +58,11 @@ flowchart LR
 | **Network exposure** | Only the ALB is public. Tasks and the database are in private subnets with no public IPs, and the database has `publicly_accessible = false`. |
 | **Security groups** | Internet → ALB (443, and 80 which only redirects) → app (3000) → database (5432). The database group admits only the app group, and the ALB can only send to port 3000 inside the VPC. The app group's outbound rules allow only TCP 443 (AWS services) and PostgreSQL to the database group. The ALB's source range is a **required** variable (`alb_ingress_cidr`, no default), and `0.0.0.0/0` is refused unless `allow_public_alb = true`, so an open load balancer is always a deliberate choice. (A plan once silently fell back to an open default during the AWS test; see [docs/E2E_Test_Results.md](docs/E2E_Test_Results.md#incident-the-alb-was-briefly-open-to-the-internet).) |
 | **IAM trust and deployments** | Both ECS roles can only be assumed by ECS acting for tasks in this account (`aws:SourceAccount` and `aws:SourceArn` conditions). The ECS service has a deployment circuit breaker with automatic rollback. An S3 gateway endpoint keeps image-layer pulls off the NAT gateway. |
-| **Database credentials** | `manage_master_user_password = true`: RDS generates the password and stores it in Secrets Manager. The credentials are never in code, variables, the image, the task definition or the Terraform state. The app reads the secret itself at runtime with its task role, and fetches it again after a rotation (see [docs/Secrets.md](docs/Secrets.md)). |
-| **Encryption** | RDS storage is encrypted. The app connects to RDS over TLS (`DB_SSL` defaults to on). ECR is encrypted at rest. |
+| **Database credentials** | `manage_master_user_password = true`: RDS generates the password and stores it in Secrets Manager. The credentials are never in code, variables, the image, the task definition or the Terraform state. The app reads the secret itself at runtime with its task role, and fetches it again after a rotation (see [docs/Secrets.md](docs/Secrets.md)). With Aurora the secret is self-managed: a write-only password, a rotation function every 7 days that never logs in to the database, and a copy in the recovery Region. |
+| **Encryption** | RDS storage is encrypted. The app connects to RDS over TLS (`DB_SSL` defaults to on, the server certificate is not verified: see the gaps). ECR is encrypted at rest. With the optional Aurora Global Database, each Region's cluster has its own customer-managed KMS key (Region A's key, and the key for the Region A secret, are written but not yet applied: [PR #53](https://github.com/bdahiya2007/secure-containerized-microservices-app-aws/pull/53)). |
 | **Image** | Plain Alpine 3.24.3 plus only the `node` binary (no npm, npx, corepack or yarn), production dependencies only, runs as the non-root `node` user, `.dockerignore` keeps `.env`, `.git` and `node_modules` out, ECR scans each image on push. |
 | **Container hardening** | The task definition sets `readonlyRootFilesystem = true`. |
-| **Least-privilege IAM** | The execution role has only the AWS-managed ECS execution policy (no access to the database secret). The task role has one permission: `secretsmanager:GetSecretValue` on the one database secret. |
+| **Least-privilege IAM** | The execution role has only the AWS-managed ECS execution policy (no access to the database secret). The task role has one permission: `secretsmanager:GetSecretValue` on the one database secret (with Aurora also `kms:Decrypt` on that secret's key, only through Secrets Manager). The rotation function's role names one secret, one cluster and its own log group. |
 | **Query handling** | The only query is a fixed `SELECT` with no user input, so there is nothing to inject into. |
 | **Leak prevention** | Every change is scanned for secrets, credentials, confidential data, PII and AWS account or resource IDs before it is committed. `.gitignore` excludes `.env` files, keys, Terraform state, `*.tfvars` and saved plans. A pre-commit hook runs `scripts/secret-scan.py` on every commit (enable it once per clone with `./scripts/install-hooks.sh`), and the same scan runs as a required check on every pull request before merge. See [SECURITY.md](SECURITY.md). |
 | **Error hygiene** | Errors return generic messages, and the database error is logged server-side, never returned to the client. |
@@ -196,19 +196,22 @@ docs/
 ├── Rollback_Test.md              # proof: a broken release deployed to the live service, no failed request, automatic rollback, CloudWatch metrics
 ├── Load_Test_and_Optimization.md # the 2026-11-02 load test with CloudWatch numbers and charts, and every optimization made so far
 ├── Secrets.md                    # database credentials in Secrets Manager: how the app reads them, rotation, IAM, rollout, debugging
-├── DR_Test_Results.md            # DR session 2026-11-07: results of each drill, every issue with cause and fix, a troubleshooting guide by symptom, and what is still unproven (Drills 4b and 5 pending)
-├── DR_Design_Decisions.md        # DR Phase B: the ten design decisions (Aurora Global Database, self-managed replicated secret, separate Region B stack, HTTPS in both Regions), cost and drill plan (design only, not built)
-├── Disaster_Recovery_Exploration.md # Aurora Serverless v2 and Global Database explored; pilot-light design, RTO/RPO, cost, open risks (design only, not built)
+├── DR_Test_Results.md            # DR session 2026-11-07: results of each drill, every issue with cause and fix, a troubleshooting guide by symptom, what is still unproven, and the teardown record
+├── DR_Design_Decisions.md        # DR Phase B: the ten design decisions (Aurora Global Database, self-managed replicated secret, separate Region B stack, HTTPS in both Regions), cost and drill plan (built and drilled once on 2026-11-07)
+├── Disaster_Recovery_Exploration.md # Aurora Serverless v2 and Global Database explored; pilot-light design, RTO/RPO, cost, open risks (the exploration that came before the design)
 ├── HTTPS_and_Domain.md           # enable_https: ACM certificate, 443 listener, redirect, Route 53 alias; how to turn it on and the demo-only public window (applied and verified 2026-11-01)
 ├── CICD.md                       # GitHub Actions + CodeDeploy blue/green pipeline: flow, one-time setup, rollback, security design
 ├── Logging_Runbook.md            # turn on, verify, read and turn off ALB, CloudTrail, S3 access and RDS logs
-├── images/                       # CloudWatch dashboard charts from the AWS test (8) and architecture diagram images (6)
-├── vulnerability-scan-report.md  # image and Terraform scan findings, remediation, before and after
+├── images/                       # CloudWatch dashboard charts from the AWS test (8) and architecture diagram images (the complete AWS Architecture Icons diagram plus 6 Mermaid renders) and DR evidence charts
+├── DR_Runbook.md                 # the DR session plan and the whole deploy, test, drill and destroy order, with pass criteria
+├── Security_Review_DR.md         # security read-through after the DR build: controls, open points, leftovers a failover creates
+├── vulnerability-scan-report.md  # image and Terraform scan findings, remediation, before and after, and the 2026-11-08 re-scan
 └── iam/product-service-iam-policy.json  # scoped IAM policy that lets a PowerUserAccess role create the stack's two ECS roles
-terraform/region-b/   # DR: the recovery Region's own stack (network first; the rest follows). Not applied yet
+terraform/region-b/   # DR: the recovery Region's own stack (network, ALB, ECS service, Aurora secondary, certificate, failover record); applied and drilled on 2026-11-07, then destroyed
 lambdas/
 └── db-rotation/          # DR design: Secrets Manager rotation function for the Aurora master password (Python, 16 offline tests; deployed and exercised in the DR session)
 scripts/
+├── build-architecture-diagram.py # generates docs/images/architecture-complete.svg from the AWS Architecture Icons
 ├── dr-probe.sh           # DR drills: a request probe that writes one CSV line per request and summarises the longest gap
 ├── render-appspec.py     # fills the task definition (and the Fargate / Fargate Spot strategy) into appspec.yaml for a deployment
 ├── check-appspec.py      # offline check that appspec.yaml matches Terraform and every action is SHA-pinned

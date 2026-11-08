@@ -1,6 +1,6 @@
 # Disaster recovery with Aurora Global Database: exploration (Step 1)
 
-**Status: design exploration only. Nothing in this page is built or deployed.** It answers "Step 1: explore Aurora Serverless v2 and Aurora Global Database" and proposes what "Step 2: update the architecture" should be. Facts below were read from the AWS documentation on 2026-11-01 (sources at the end). Costs are **estimates from list prices**, not measured. Where something could not be confirmed, it says so.
+**Status: the exploration that came first.** What was decided is in [DR_Design_Decisions.md](DR_Design_Decisions.md); it was built and drilled on 2026-11-07 ([DR_Test_Results.md](DR_Test_Results.md)). It answers "Step 1: explore Aurora Serverless v2 and Aurora Global Database" and proposes what "Step 2: update the architecture" should be. Facts below were read from the AWS documentation on 2026-11-01 (sources at the end). Costs are **estimates from list prices**, not measured. Where something could not be confirmed, it says so.
 
 The choices made after this exploration are in [DR_Design_Decisions.md](DR_Design_Decisions.md).
 

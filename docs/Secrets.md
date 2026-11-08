@@ -62,7 +62,7 @@ Because the secret rotates every 7 days, the second row is the deciding one: wit
 
 So the app is no longer permission-free, and the documentation that said so is updated. The grant is as small as it can be: one action on one resource, and the secret holds only this database's credentials. The roles' trust policies still allow only ECS in this account (confused-deputy conditions).
 
-The secret is encrypted with the AWS-managed key `aws/secretsmanager`, which needs no extra permission. A customer-managed key would need `kms:Decrypt` on the task role as well.
+With the RDS instance (the default), the secret is encrypted with the AWS-managed key `aws/secretsmanager`, which needs no extra permission. With Aurora (`enable_aurora`) the secret is self-managed and encrypted with a customer-managed key (`aws_kms_key.aurora`, [PR #53](https://github.com/bdahiya2007/secure-containerized-microservices-app-aws/pull/53), written after the DR session and not yet applied), so the task role also has `kms:Decrypt` on that key, and the rotation function `kms:Decrypt` and `kms:GenerateDataKey`, each only through Secrets Manager. The Region B replica of the secret uses the AWS-managed key in Region B. Check all of this at the next rebuild ([DR_Test_Results.md](DR_Test_Results.md), section 5).
 
 ## Roll it out
 
