@@ -10,14 +10,33 @@
 set -u
 
 summary() {
-  awk -F, '
-    NR > 1 { total++
-             if ($2 == "200") { ok++; if (run > longest) longest = run; run = 0 }
-             else             { bad++; if (run == 0) first = $1; run++; last = $1 } }
-    END    { if (run > longest) longest = run
-             printf "requests: %d   200: %d   not 200: %d\n", total, ok, bad
-             printf "longest run of failed requests: %d (about %d seconds at 2 s apart)\n", longest, longest * 2 }
-  ' "$1"
+  # The span of an outage is measured from the timestamps (first failed request to the first success after it), not from the
+  # number of failed requests: a request that times out takes 5 seconds, not the 2 seconds between requests.
+  python3 -I - "$1" <<'PY'
+import csv, sys, datetime as dt
+rows = list(csv.reader(open(sys.argv[1])))[1:]
+t = lambda s: dt.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
+ok = sum(1 for r in rows if r[1] == "200")
+print(f"requests: {len(rows)}   200: {ok}   not 200: {len(rows) - ok}")
+best = (0, None, None, 0)  # span in seconds, first failure, first success after, failed requests in the run
+i = 0
+while i < len(rows):
+    if rows[i][1] != "200":
+        j = i
+        while j < len(rows) and rows[j][1] != "200":
+            j += 1
+        end = rows[j][0] if j < len(rows) else rows[-1][0]
+        span = (t(end) - t(rows[i][0])).total_seconds()
+        if span > best[0]:
+            best = (span, rows[i][0], end, j - i)
+        i = j
+    else:
+        i += 1
+if best[1]:
+    print(f"longest outage: {best[0]:.0f} s, from {best[1]} to {best[2]} ({best[3]} failed requests; by timestamps, not by count)")
+else:
+    print("no failed requests")
+PY
 }
 
 if [ "${1:-}" = "--summary" ]; then
