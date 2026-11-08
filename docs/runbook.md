@@ -336,7 +336,7 @@ terraform -chdir=terraform output -raw dashboard_url
 | Target health | `HealthyHostCount` and `UnHealthyHostCount` | Confirm tasks pass their health checks |
 
 **Two notes:** `CPUReservation` and `MemoryReservation` are published only for EC2-backed ECS clusters, not Fargate, so the dashboard uses Container Insights' Fargate equivalents (`CpuReserved`, `MemoryReserved`).
-There is no Lambda function in this project, so there are no Lambda `Invocations` or `Errors` to chart and no X-Ray tracing to enable (see the note in `terraform/monitoring.tf`). New metrics can take a few minutes to appear. Example charts from the AWS test are in [E2E_Test_Results.md](E2E_Test_Results.md#charts). To render the dashboard's charts as PNG files without the console, use `aws cloudwatch get-metric-widget-image` with a widget's properties plus `start`, `end`, `width`, `height` and a `timezone` offset such as `-0700`.
+The only Lambda function is the optional database-password rotation function (`enable_aurora`; it has active X-Ray tracing and a 14-day log group), so there is no Lambda panel on the dashboard; the default deployment has no Lambda at all (see the note in `terraform/monitoring.tf`). New metrics can take a few minutes to appear. Example charts from the AWS test are in [E2E_Test_Results.md](E2E_Test_Results.md#charts). To render the dashboard's charts as PNG files without the console, use `aws cloudwatch get-metric-widget-image` with a widget's properties plus `start`, `end`, `width`, `height` and a `timezone` offset such as `-0700`.
 Container Insights adds a small CloudWatch cost, and a custom dashboard costs about $3 a month after the free allowance.
 
 ## 8. Troubleshooting

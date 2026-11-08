@@ -1,6 +1,6 @@
 # Disaster recovery: design decisions (Phase B)
 
-**Status: decisions only. Nothing in this page is built or deployed.** It records the choices made after the [exploration](Disaster_Recovery_Exploration.md), so the Terraform that follows is written once. Costs are **estimates from list prices**, not measured; items marked *verify* are assumptions to confirm while writing the code.
+**Status: built and drilled once on 2026-11-07 (results in [DR_Test_Results.md](DR_Test_Results.md)); the stack was destroyed afterwards.** The text below is the design as decided before the build; where the drills differed, the results document says so. It records the choices made after the [exploration](Disaster_Recovery_Exploration.md), so the Terraform that follows is written once. Costs are **estimates from list prices**, not measured; items marked *verify* are assumptions to confirm while writing the code.
 
 ## Decisions
 
