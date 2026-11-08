@@ -103,3 +103,14 @@ evidence*/
 overrides.json
 *.sarif
 *.zip
+
+# --- Tool credentials and data dumps that are easy to commit by accident ---
+.npmrc
+.netrc
+.docker/
+.envrc
+.gnupg/
+secrets.*
+*.secret
+*.dump
+backup*.sql
