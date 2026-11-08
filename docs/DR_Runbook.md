@@ -33,7 +33,7 @@ Start the probe in a second terminal before each drill and keep it running: `scr
 aws rds switchover-global-cluster --region us-east-1 --global-cluster-identifier product-service-global \
   --target-db-cluster-identifier <the Region B cluster ARN>
 ```
-Wait until the Region B cluster is the writer (`aws rds describe-global-clusters`), note the time, then switch back the same way with the Region A cluster as the target. The probe (which only reads) should show little or no gap.
+Wait until the Region B cluster is the writer (`aws rds describe-global-clusters`), note the time, then switch back the same way with the Region A cluster as the target. **Repeat this drill after the reader-endpoint change** (`app_uses_reader_endpoint`) and compare the failed-request gap with the 32 s measured on 2026-11-07. The probe (which only reads) should show little or no gap.
 
 **Drill 4: a DNS failover rehearsal (no database change).** Add the SECONDARY record (`enable_failover_record = true` in the Region B stack, apply). Learn each load balancer's addresses with `dig +short`. Let Region A's autoscaling hold zero tasks, then stop the service:
 ```bash

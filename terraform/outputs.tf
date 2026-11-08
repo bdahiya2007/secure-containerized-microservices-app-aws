@@ -96,3 +96,8 @@ output "failover_alarm_name" {
   description = "The CloudWatch alarm the health check follows (empty unless enable_dr_failover). Setting it to ALARM by hand rehearses a failover without touching the app."
   value       = one(aws_cloudwatch_metric_alarm.no_running_tasks[*].alarm_name)
 }
+
+output "db_reader_endpoint" {
+  description = "The Aurora cluster's reader endpoint, which the app connects to when app_uses_reader_endpoint is on (empty unless enable_aurora)"
+  value       = one(aws_rds_cluster.primary[*].reader_endpoint)
+}

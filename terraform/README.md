@@ -171,6 +171,8 @@ flowchart LR
 | `aurora_min_capacity` / `aurora_max_capacity` | `0.5` / `4` | Serverless v2 capacity range in ACUs. AWS recommends 8 for a global primary; the drill measures replication lag at this low setting |
 | `db_password_version` | `1` | Version of the initial write-only password; bump it to set a fresh one (rotation changes the password on its own) |
 | `db_rotation_days` | `7` | How often Secrets Manager rotates the Aurora password |
+| `app_uses_reader_endpoint` | `true` | With `enable_aurora`, the app connects to the cluster's reader endpoint (the migration task keeps the writer). The service only reads, and the reader endpoint keeps working when this Region's cluster is a secondary after a switchover or failover. Set `false` if the app ever gets a route that writes |
+| `alb_health_check_interval_seconds` | `10` | How often the load balancer checks each task's `/health` (2 failures mark it unhealthy, 2 successes healthy; timeout 5 s). 10 detects a failing task in about 20 s, the AWS default of 30 in about 60 s. Shorter is less tolerant of a brief blip such as a database restart. Allowed 10 to 300 |
 | `dr_region` / `enable_dr_replica` | `us-west-2` / `false` | The recovery Region, and whether the database secret and the ECR images are replicated there (needed by the Region B stack; the image replication also needs `enable_aurora`) |
 | `enable_dr_failover` | `false` | Route 53 failover routing for `app_domain`: this Region's record becomes the PRIMARY, with a health check that follows the CloudWatch alarm on the running tasks. The Region B stack creates the SECONDARY. Needs `enable_https` |
 
@@ -232,6 +234,7 @@ push the image, then run the full apply; see [docs/ECR_Runbook.md](../docs/ECR_R
 | `ecr_repository_url` | Where to push the image |
 | `app_url` | `https://<app_domain>` with `enable_https`, otherwise the load balancer's own `http://` address |
 | `rds_endpoint` | Database host name (the RDS instance, or the Aurora cluster with `enable_aurora`) |
+| `db_reader_endpoint` | Only with `enable_aurora`: the cluster's reader endpoint, which the app uses when `app_uses_reader_endpoint` is on |
 | `db_secret_arn` | Secrets Manager secret holding the DB credentials |
 | `db_secret_name`, `global_cluster_id`, `global_cluster_engine_version`, `aurora_cluster_arn`, `db_rotation_function` | Only with `enable_aurora`: what the Region B stack reads from this stack's state, and the rotation function's name |
 | `failover_health_check_id`, `failover_alarm_name` | Only with `enable_dr_failover`: the Route 53 health check behind the PRIMARY record and the alarm it follows |

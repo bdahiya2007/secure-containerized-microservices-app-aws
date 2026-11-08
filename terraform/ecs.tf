@@ -135,7 +135,7 @@ resource "aws_ecs_task_definition" "app" {
     portMappings           = [{ containerPort = 3000, protocol = "tcp" }]
 
     environment = [
-      { name = "DB_HOST", value = local.db_host },
+      { name = "DB_HOST", value = local.app_db_host },
       { name = "DB_PORT", value = tostring(local.db_port) },
       { name = "DB_NAME", value = var.db_name },
       { name = "DB_SSL", value = "true" },
@@ -254,8 +254,12 @@ resource "aws_lb_target_group" "app" {
   deregistration_delay = 30
 
   health_check {
-    path    = "/health"
-    matcher = "200"
+    path                = "/health"
+    matcher             = "200"
+    interval            = var.alb_health_check_interval_seconds
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
   }
 }
 
