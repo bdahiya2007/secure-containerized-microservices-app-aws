@@ -4,6 +4,12 @@ locals {
   db_host       = var.enable_aurora ? one(aws_rds_cluster.primary[*].endpoint) : one(aws_db_instance.main[*].address)
   db_port       = var.enable_aurora ? one(aws_rds_cluster.primary[*].port) : one(aws_db_instance.main[*].port)
   db_secret_arn = var.enable_aurora ? one(aws_secretsmanager_secret.db[*].arn) : one(aws_db_instance.main[*].master_user_secret[0].secret_arn)
+
+  # The host the running app connects to. With Aurora and app_uses_reader_endpoint (the default) it is the cluster's READER endpoint,
+  # like Region B's app: the service only reads, and a reader endpoint keeps working when this cluster is a secondary after a
+  # switchover or failover, where the writer endpoint stops serving. With one instance the reader endpoint reaches the writer
+  # instance, so nothing changes in normal operation. The migration task keeps db_host: it writes.
+  app_db_host = var.enable_aurora && var.app_uses_reader_endpoint ? one(aws_rds_cluster.primary[*].reader_endpoint) : local.db_host
 }
 
 # The instance gained a count; this keeps the existing one in state under its new address

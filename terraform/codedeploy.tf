@@ -23,8 +23,12 @@ resource "aws_lb_target_group" "green" {
   deregistration_delay = 30
 
   health_check {
-    path    = "/health"
-    matcher = "200"
+    path                = "/health"
+    matcher             = "200"
+    interval            = var.alb_health_check_interval_seconds
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
   }
 }
 

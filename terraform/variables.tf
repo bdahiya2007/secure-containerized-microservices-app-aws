@@ -259,3 +259,20 @@ variable "enable_dr_failover" {
     error_message = "enable_dr_failover needs enable_https (the failover record is the HTTPS name)."
   }
 }
+
+variable "app_uses_reader_endpoint" {
+  description = "With enable_aurora, the app connects to the cluster's reader endpoint instead of the writer endpoint (the migration task still uses the writer). The service only reads, so it works, and it keeps working when this Region's cluster is a secondary after a switchover or failover. Set false if the app ever gets a route that writes."
+  type        = bool
+  default     = true
+}
+
+variable "alb_health_check_interval_seconds" {
+  description = "How often the load balancer checks each task's /health, in seconds. With 2 failures needed to mark a task unhealthy (and 2 successes to mark it healthy), 10 detects a failing task in about 20 seconds; the AWS default of 30 takes about 60. Shorter reacts sooner but is less tolerant of a brief blip, such as a database restart."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.alb_health_check_interval_seconds >= 10 && var.alb_health_check_interval_seconds <= 300
+    error_message = "alb_health_check_interval_seconds must be between 10 and 300 (the timeout is 5 seconds and must be shorter than the interval)."
+  }
+}
