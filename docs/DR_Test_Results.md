@@ -466,6 +466,8 @@ Done on 2026-11-08 (UTC), after the drills and the architecture and security doc
 
 **The failover snapshot was not there.** The runbook says to delete the `rds:unplanned-global-failover-...` snapshot (created at 23:16:27 during Drill 5). The cluster snapshot lists in both Regions were empty at the check, so there was nothing to delete: it was removed together with the old primary cluster, or earlier. This was not investigated further. The runbook keeps the instruction because the listing is the way to be sure.
 
-**Not yet confirmed at the time of writing:** the Route 53 zone check for stray records, deletion of the two saved plan files, restoring `demo.auto.tfvars`, and the next day's bill. KMS keys show as pending deletion for 7 days, which is expected.
+**Route 53 check:** the zone's record list was read after the destroy. The `products.` and `usw2.` records, the failover records and their certificate-validation records are gone; only records for other sites in the same zone remain (the apex and `www`, `orders.`, and their certificate validation records).
+
+**Not yet confirmed at the time of writing:** deletion of the two saved plan files, restoring `demo.auto.tfvars`, and the next day's bill. KMS keys show as pending deletion for 7 days, which is expected.
 
 **Order that worked:** Region B first, then the main stack; the destroys took about 20 minutes each, almost all of it the Aurora instance. Nothing needed a retry.
