@@ -372,18 +372,18 @@ The commands to turn each on and read it are in the [logging runbook](Logging_Ru
 
 ## 11. Known gaps
 
-These are deliberate demo trade-offs or work not yet done. The full table, with the planned fix for each, is in the [README](../README.md#open-security-gaps).
+These are deliberate demo trade-offs or work not yet done. The full table, with the planned fix for each, is in the [README](../README.md#open-security-gaps), and the review after the DR build is in [Security_Review_DR.md](Security_Review_DR.md).
 
 | Gap | Why it matters |
 |---|---|
 | No authentication, no WAF | Anyone allowed through the security group can read the products. The load balancer admits only `alb_ingress_cidr` by default, because of this. (HTTPS is done: see [HTTPS_and_Domain.md](HTTPS_and_Domain.md).) |
 | Database TLS does not verify the server certificate | A network-position attacker could in theory impersonate the database |
 | Mutable ECR tags | `latest` can be overwritten, and rollbacks by tag are unreliable |
-| Single NAT gateway and single-AZ RDS | Not resilient to a zone failure |
+| Single NAT gateway; single-AZ RDS (the optional Aurora global database adds a second Region but runs one instance per cluster) | Not resilient to a zone failure |
 | HTTPS egress to anywhere (443) | The remaining open outbound rule; interface VPC endpoints would remove it, at extra cost |
-| No alarms for errors or unhealthy targets | Failures are visible only if someone looks |
+| Few alarms | One alarm exists (`no-running-tasks`, which feeds the DR failover); there are none for errors or unhealthy targets, so those failures are visible only if someone looks |
 | No distributed tracing; no Lambda in this project | X-Ray tracing would need the SDK and a sidecar; there is no Lambda function to trace |
-| Infrastructure applied by hand, shared state bucket, one environment, `main` not protected while the repo is private | Single-operator; the pipeline deploys only the application; see the README roadmap |
+| Infrastructure applied by hand, shared state bucket, one environment (`main` is now protected and the repo is public) | Single-operator; the pipeline deploys only the application; see the README roadmap |
 | One ALB 502 during a load test, cause probable but not proven | Node's 5-second keep-alive was shorter than the ALB's 60-second idle timeout; the fix is deployed (`server.js`), and a repeat 8-minute load test (33,600 requests) had zero 5XX, which is consistent with the fix but not proof |
 
 ## 12. Cost
