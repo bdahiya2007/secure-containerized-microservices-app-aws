@@ -450,6 +450,7 @@ Commands use placeholders in angle brackets. Run everything for Region B with `-
 - **The cause of Region B's brief 500/503 responses each time its cluster is demoted** (Drills 3 and 5): not diagnosed (the logs were not read).
 - **Faster failover after a database failover** (issue 15): the two open improvements have not been tried.
 - **The scheduled 7-day rotation** (only manual rotations were run).
+- **The customer-managed key for the Region A cluster and the database secret** (PR #53, written after the session and not yet planned or applied): at the next rebuild, check that the plan is a first create with no replacement, that the first rotation works with the new key (the rotation function needs `kms:Decrypt` and `kms:GenerateDataKey` on it), that the migration task and the app task can read the secret, and that Region B can still read the replica, which uses the AWS-managed key there.
 - **A real Region outage:** nothing here can simulate one; the drills stop services or move roles, which is the closest available.
 
 ## 6. Teardown and leftovers
