@@ -74,6 +74,16 @@ skip-check:
   # The deploy role's trust policy (terraform/bootstrap) pins the repository by immutable owner and repository ID plus
   # the environment, which is stricter than the repo-name pattern this rule recognises (false positive).
   - CKV_AWS_358
+  # The database-password rotation function (terraform/aurora.tf, enable_aurora). It only calls the Secrets Manager and RDS
+  # APIs and never connects to the database, so it needs no VPC (CKV_AWS_117; a VPC would need endpoints or a NAT gateway
+  # for those calls). Only Secrets Manager can invoke it, synchronously, so a dead-letter queue (CKV_AWS_116, asynchronous
+  # invocations only) would never receive anything, and a concurrency limit (CKV_AWS_115) protects nothing. The code is
+  # deployed only from this repository through Terraform, so code signing (CKV_AWS_272) adds a signing profile and a
+  # pipeline step for a demo. Rotation failures show in the secret's status and the function's log group.
+  - CKV_AWS_117
+  - CKV_AWS_116
+  - CKV_AWS_115
+  - CKV_AWS_272
   # Mutable ECR tags: a known gap listed in the README. The pipeline pushes unique commit-SHA tags, but the Terraform task
   # definition still starts from :latest, so the repository cannot be made immutable until that is changed (docs/CICD.md).
   - CKV_AWS_51

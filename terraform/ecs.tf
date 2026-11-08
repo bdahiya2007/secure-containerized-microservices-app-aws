@@ -90,11 +90,21 @@ resource "aws_iam_role_policy" "task_read_db_secret" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = local.db_secret_arn
-    }]
+    Statement = concat(
+      [{
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = local.db_secret_arn
+      }],
+      # With Aurora the secret is encrypted with a customer-managed key, so reading it also needs that key: decrypt only,
+      # and only through Secrets Manager
+      var.enable_aurora ? [{
+        Effect    = "Allow"
+        Action    = ["kms:Decrypt"]
+        Resource  = aws_kms_key.aurora[0].arn
+        Condition = { StringEquals = { "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com" } }
+      }] : []
+    )
   })
 }
 
