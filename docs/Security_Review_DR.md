@@ -8,7 +8,7 @@
 |---|---|---|
 | Region B load balancer | Security group admits only `alb_ingress_cidr` on 443 and 80, and refuses `0.0.0.0/0` unless `allow_public_alb` is set (same guard as Region A); egress only to the VPC on 3000; HTTPS with its own ACM certificate | Same as Region A: no authentication on the API, so the address restriction is the guard |
 | Region B tasks | Private subnets, task role limited to the replica secret, `DB_SSL=true` | The app does not verify the database certificate (same gap as Region A) |
-| Aurora (both Regions) | `storage_encrypted`, a KMS key per Region, `publicly_accessible = false`, a database security group that admits only the app group on 5432 | `deletion_protection = false`, `skip_final_snapshot = true`, IAM database authentication off: demo choices that Checkov accepts with reasons |
+| Aurora (both Regions) | `storage_encrypted`, storage encrypted (Region B with its own customer-managed KMS key; Region A with the AWS-managed `aws/rds` key, which Checkov flags: see the re-scan below), `publicly_accessible = false`, a database security group that admits only the app group on 5432 | `deletion_protection = false`, `skip_final_snapshot = true`, IAM database authentication off: demo choices that Checkov accepts with reasons |
 | Database secret | Self-managed, write-only value (never in state), replicated to Region B, rotated every 7 days | The replica uses the AWS-managed Secrets Manager key, not the Region B key (the secret has no `kms_key_id`) |
 | Rotation Lambda | Role trusts only Lambda in this account; the policy names one secret and one cluster; `GetRandomPassword` and X-Ray actions need `*` because they take no resource; the invoke permission allows only Secrets Manager from this account; no database login (it calls `ModifyDBCluster`) | Not in a VPC and no code signing, dead-letter queue or reserved concurrency: acceptable for a function only Secrets Manager can call, but not confirmed against a fresh Checkov run |
 | ECR replication | One registry-wide rule to Region B | The rule replaces any other registry replication setting in the account (checked first in the runbook) |
@@ -32,8 +32,10 @@
 
 The lists had not been revised since the DR build and still said, for example, that CI has no scanning (it has Trivy, Checkov, Semgrep, CodeQL and a secret scan), that there is no static analysis, that there are no automated tests (30 unit tests plus 16 for the rotation function), that `main` is unprotected, and that the database is single-AZ RDS (Aurora Serverless v2 is used when `enable_aurora` is on).
 
+## Re-scan on 2026-11-08
+
+Trivy, Checkov and `npm audit` were re-run locally; the results are in [vulnerability-scan-report.md](vulnerability-scan-report.md#re-scan-on-2026-11-08-after-the-dr-build). The main point: with the DR switches **on**, Checkov reports 6 failed checks on 3 resources that CI never sees, because CI scans the code with every switch at its default (off).
+
 ## Not done yet
 
-- A fresh Trivy image scan, Checkov run and `npm audit` (they need Docker and `npm`, so they wait for approval). CI already runs Checkov, Trivy and Semgrep on each pull request, and all pass.
-- The vulnerability report ([vulnerability-scan-report.md](vulnerability-scan-report.md)) still describes the October scans.
 - A scan of the Lambda's dependencies: it uses only the standard library and the Lambda runtime's boto3.
