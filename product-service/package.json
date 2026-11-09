@@ -12,7 +12,7 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
-    "@aws-sdk/client-secrets-manager": "^3.1161.0",
+    "@aws-sdk/client-secrets-manager": "^3.1164.0",
     "express": "^5.3.0",
     "pg": "^8.13.1"
   }
