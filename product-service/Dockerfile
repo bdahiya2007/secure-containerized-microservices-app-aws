@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Stage 1: install production dependencies only ----
-FROM node:26.13.0-alpine3.24 AS deps
+FROM node:26.13.1-alpine3.24 AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
