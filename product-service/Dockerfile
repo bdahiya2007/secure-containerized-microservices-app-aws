@@ -7,7 +7,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # ---- Stage 2: minimal runtime image: plain Alpine plus the node binary only ----
-FROM alpine:3.24.3 AS runtime
+FROM alpine:3.24.4 AS runtime
 ENV NODE_ENV=production
 
 # node is dynamically linked against libstdc++, libgcc and libatomic; add an unprivileged user
